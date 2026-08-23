@@ -1,0 +1,13 @@
+# Python validation environment/cache
+.venv/
+__pycache__/
+*.py[cod]
+
+# MATLAB/Octave editor and generated artifacts
+*.asv
+*.m~
+octave-workspace
+
+# NavSim user exports (keep generated logs out of source control)
+navlog*.mat
+navlog*.csv

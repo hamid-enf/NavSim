@@ -1,0 +1,108 @@
+# Navigation Simulator (GNSS/INS Educational Lab)
+
+شبیه‌ساز کاملاً **تعاملی، گرافیکی و آموزشی** Navigation در متلب:
+جریان کامل داده از **Sensor** تا **Navigation Solution** به‌صورت زنده قابل مشاهده است
+و پارامترهای سیستم در **Runtime** قابل تغییرند.
+
+```
+Trajectory → Truth → IMU ─┐                ┌→ (raw, برای نمایش)
+                          ├→ Calibration → INS → Prediction → Fusion → Estimate → Error Analysis
+Trajectory → Truth → GNSS ┴──────────────────────────┘
+```
+
+## شروع سریع
+
+```matlab
+cd NavSim
+main            % راه‌اندازی GUI
+```
+
+اجرای تست‌های اعتبارسنجی عددی (بدون GUI):
+
+```matlab
+cd NavSim
+runAllTests
+```
+
+## قابلیت‌ها (نگاشت به الزامات)
+
+| بخش | پیاده‌سازی |
+|---|---|
+| Trajectory | 9 مسیر: Straight، Circle، FigureEight، Acceleration، Climb، Descent، Turn، Combined3D، UserDefined (عبارت دلخواه `p(t)`) |
+| IMU | ژیرو/شتاب‌سنج: Bias، Noise (ARW/VRW)، Scale Factor، Misalignment، Bias Random Walk — همه در Runtime |
+| GNSS | نرخ، نویز H/V، بایاس، سرعت، Dropout (برنامه‌ریزی‌شده/تصادفی)، Outlier، Delay |
+| INS | مکانیک Strapdown واقعی (Quaternion + انتگرال ذوزنقه‌ای)، پشتیبانی از **dt متغیر** |
+| Alignment | Levelling با شتاب‌سنج + قطب‌نما (stub)، خطای اولیه کاربر، نمایش همگرایی |
+| Fusion | Error-State EKF با ۱۵ حالت (`δp, δv, δφ, δbg, δba`)، کوپل شل، تصحیح فیدبکی؛ حالت INS Only |
+| Error Injection | تب Errors: همه منابع خطا با یک کلیک فعال/غیرفعال |
+| Visualization | Position / Velocity / Attitude / Errors / Sensors + نمای 3D (وسیله، محورهای Body و Nav، مسیرها، نقاط GNSS) |
+| Real-Time | Start / Pause / Stop / Reset / Step، حالت Real-time و Fast، اسلایدر سرعت |
+| Data Flow Monitor | پنل زنده‌ی مراحل + مقادیر فعلی هر مرحله (Gyro, Lat/Lon/Alt, ...) |
+| Educational Mode | کلیک روی هر مرحله → توضیح کوتاه: چیست؟ ورودی/خروجی؟ معادله؟ خطاها؟ |
+| Experiments | ۱۰ آزمایش آماده با اجرای Headless و مقایسه‌ی آماری |
+| Logging | ذخیره MAT/CSV + Replay انیمیشنی |
+| Tests | ۱۰ تست MATLAB/Octave (`runAllTests`) + ۸ تست آینهٔ عددی Python |
+
+## ساختار پوشه‌ها
+
+```
+NavSim/
+  main.m                  launcher
+  startup.m               addpath همه زیرپوشه‌ها
+  runAllTests.m           اجرای مجموعه تست
+  simulation/             defaultConfig.m, SimEngine.m      (موتور بدون گرافیک)
+  trajectory/             TrajectoryLibrary.m
+  imu/                    IMUModel.m
+  gnss/                   GNSSModel.m
+  ins/                    INSMechanization.m
+  alignment/              Alignment.m
+  fusion/                 LooselyCoupledEKF.m
+  visualization/          PlotManager.m, View3D.m
+  ui/                     NavSimApp.m, ParamCatalog.m, DataFlowView.m,
+                          EduContent.m, ExperimentPresets.m
+  logging/                NavLogger.m
+  utils/                  quaternion/euler/DCM/LLA/NED + setByPath/getByPath ...
+  tests/                  test_*.m
+  docs/                   ARCHITECTURE.md, USER_GUIDE.md, EXPERIMENTS.md
+```
+
+## مدل و ساده‌سازی‌های آموزشی (شفاف‌سازی)
+
+- فریم ناوبری **NED محلی** (تخت) با تبدیل WGS84 به Lat/Lon/Alt؛ برای منطقه‌ی کوچک معتبر است.
+- چرخش زمین و شتاب کوریولیس/ترابرد عمداً نادیده گرفته شده‌اند تا تمرکز روی مکانیک، خطاها و Fusion باشد.
+- Heading در Alignment از «قطب‌نمای مغناطیسی» مدل‌شده (چون gyrocompassing بدون چرخش زمین معنادار نیست).
+- همگرایی کامل ۱۵-state EKF با سنجش فقط‌موقعیت نیازمند مانور است (قابل مشاهده در Exp 7).
+
+## اعتبارسنجی و توسعه
+
+مجموعهٔ اصلی ۱۰ تست Headless دارد و در صورت شکست هر تست، `runAllTests` با خطا خاتمه
+می‌یابد (مناسب CI):
+
+```matlab
+startup
+runAllTests
+```
+
+برای بررسی سریع بدون MATLAB/Octave، آینهٔ عددی Python و چکرهای ایستا را اجرا کنید:
+
+```bash
+python -m venv .venv
+# Linux/macOS: source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+python tools/check_mfiles.py
+python tools/check_ui_config.py
+python tools/run_mirror_tests.py
+```
+
+آینهٔ فعلی ۸ سناریو را پوشش می‌دهد: تبدیلات و heading مسیرها، Perfect match، drift
+ژیرو/شتاب‌سنج، همگرایی EKF، Alignment، `dt` متغیر، GNSS dropout و رگرسیون تراز زمانی/
+gravity. این دستورها exit-code مناسب CI دارند. تست‌های MATLAB علاوه بر این موارد، زمان‌بندی
+Runtime GNSS، تغییر حالت Fusion، اعتبارسنجی
+Config، همهٔ ۹ مسیر و سازگاری Snapshot زنده را نیز بررسی می‌کنند.
+
+> **INS آزاد موازی**: خروجی «INS» همیشه مسیر drift خام (بدون تصحیح فیلتر) را نشان می‌دهد،
+> حتی وقتی Fusion فعال است — مقایسهٔ زندهٔ INS در برابر Fused هستهٔ دمو است.
+
+نسخهٔ MATLAB مورد نیاز: **R2020b یا جدیدتر** (`uifigure`/`uigridlayout`). هسته و تست‌های
+عددی با GNU Octave نیز سازگار طراحی شده‌اند، اما GUI به MATLAB نیاز دارد. اگر متن فارسی
+در ویندوز به‌هم‌ریخته دیده شد، Encoding فایل‌ها را UTF-8 نگه دارید.
