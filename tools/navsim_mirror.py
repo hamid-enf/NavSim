@@ -194,6 +194,7 @@ class IMU:
 class GNSS:
     def __init__(s,c):
         s.c=c; s.nextEpoch=0.0; s.queue=[]; s.last=None
+        s.gmState=np.zeros(3); s.gmInit=False; s.lastGmT=0.0
         G=c['GNSS']
         s.windows=[]
         for seg in str(G['dropoutText']).split(';'):
@@ -207,6 +208,17 @@ class GNSS:
             if a<=t<=b: return True
         if G['randDropProb']>0 and s.rng.random()<G['randDropProb']: return True
         return False
+    def advanceGm(s,t):
+        # Stationary Gauss-Markov correlated error with exact transition.
+        G=s.c['GNSS']
+        if not s.gmInit:
+            s.gmState=G['gmSigma']*s.rng.standard_normal(3); s.gmInit=True
+        else:
+            dt=max(t-s.lastGmT,0.0); phi=np.exp(-dt/G['gmTau'])
+            sig=G['gmSigma']*np.sqrt(max(1.0-phi*phi,0.0))
+            s.gmState=phi*s.gmState+sig*s.rng.standard_normal(3)
+        s.lastGmT=t
+        return s.gmState.copy()
     def update(s,t,truth):
         G=s.c['GNSS']
         hasG=False; z=None; evt=''
@@ -219,6 +231,8 @@ class GNSS:
                 sH=G['posSigmaH']*(1 if G['useNoise'] else 0)
                 sV=G['posSigmaV']*(1 if G['useNoise'] else 0)
                 p=truth['p']+np.array(G['biasNed'])+np.array([sH*s.rng.standard_normal(),sH*s.rng.standard_normal(),sV*s.rng.standard_normal()])
+                if G.get('useGmNoise',False):
+                    p = p + s.advanceGm(t)
                 isOut=False
                 if G['useOutlier'] and s.rng.random()<G['outlierProb']:
                     p = p + G['outlierMag']*(2*s.rng.random(3)-1); isOut=True
@@ -226,11 +240,42 @@ class GNSS:
                        outlier=isOut, tEmit=t+G['delay'], hasVel=G['enableVel'], v=None, Rv=None)
                 if G['enableVel']:
                     sVl=G['velSigma']*(1 if G['useNoise'] else 0)
-                    z['v']=truth['v']+sVl*s.rng.standard_normal(3); z['Rv']=np.eye(3)*max(sVl,0.01)**2
+                    z['v']=truth['v']+sVl*s.rng.standard_normal(3)
+                    if isOut and G.get('outlierVelSigma',0)>0:
+                        z['v']=z['v']+G['outlierVelSigma']*(2*s.rng.random(3)-1)
+                    z['Rv']=np.eye(3)*max(sVl,0.01)**2
                 s.queue.append(z); evt='MEAS_OUTLIER' if isOut else 'MEAS'
         if s.queue and s.queue[0]['tEmit'] <= t+1e-12:
             z=s.queue.pop(0); hasG=True; s.last=z
         return hasG,z,evt
+
+class Baro:
+    def __init__(s,c):
+        s.c=c; s.nextEpoch=0.0; s.gmState=0.0; s.gmInit=False; s.lastGmT=0.0
+        s.rng=np.random.default_rng(c['Sim']['seed']+13)
+    def advanceGm(s,t):
+        B=s.c['Baro']
+        if not s.gmInit:
+            s.gmState=B['gmSigma']*s.rng.standard_normal(); s.gmInit=True
+        else:
+            dt=max(t-s.lastGmT,0.0); phi=np.exp(-dt/B['gmTau'])
+            sig=B['gmSigma']*np.sqrt(max(1.0-phi*phi,0.0))
+            s.gmState=phi*s.gmState+sig*s.rng.standard_normal()
+        s.lastGmT=t
+        return s.gmState
+    def update(s,t,hTrue):
+        if not s.c['Baro']['enabled']: return False,None
+        if t >= s.nextEpoch - 1e-12:
+            rate=max(s.c['Baro']['rate'],1e-3)
+            s.nextEpoch += 1.0/rate
+            if s.nextEpoch < t: s.nextEpoch = t + 1.0/rate
+            B=s.c['Baro']
+            drift = s.advanceGm(t) if B['gmSigma']>0 else 0.0
+            sig=B['sigma']
+            z=dict(h=hTrue+B['bias']+drift+sig*s.rng.standard_normal(),
+                   R=max(sig,0.05)**2, tMeas=t)
+            return True,z
+        return False,None
 
 class INS:
     def __init__(s):
@@ -320,6 +365,10 @@ class EKF:
         s.lastInnov=innov; s.lastNIS=float(innov.T@np.linalg.solve(S,innov))
     def updatePos(s,zp,R): s._kalm(zp,np.hstack([np.eye(3),np.zeros((3,12))]),R*s.rScale)
     def updateVel(s,zv,Rv): s._kalm(zv,np.hstack([np.zeros((3,3)),np.eye(3),np.zeros((3,9))]),Rv*s.rScale)
+    def updateBaro(s,hMeas,hIns,R):
+        # delta_h = -delta_p_D -> H = [0 0 -1 0 ... 0]
+        H=np.zeros((1,15)); H[0,2]=-1.0
+        s._kalm(np.array([hMeas-hIns]),H,np.array([[R*s.rScale]]))
     def consume(s):
         dx=s.x.copy(); s.x[:]=0; return dx
     def sigmas(s): return np.sqrt(np.maximum(np.diag(s.P),0))
@@ -338,13 +387,16 @@ def default_config():
                accelMisDeg=[0.02,-0.02,0.01],accelBiasRW=0.0),
       GNSS=dict(enabled=True,rate=1.0,useNoise=True,posSigmaH=1.5,posSigmaV=3.0,enableVel=False,
                 velSigma=0.05,biasNed=[0,0,0],useDropout=False,dropoutText='60 75',randDropProb=0.0,
-                useOutlier=False,outlierProb=0.02,outlierMag=50,delay=0.0),
+                useOutlier=False,outlierProb=0.02,outlierMag=50,delay=0.0,
+                useGmNoise=False,gmSigma=2.0,gmTau=30.0,outlierVelSigma=0.0),
+      Baro=dict(enabled=False,rate=10.0,sigma=1.0,bias=0.0,gmSigma=0.0,gmTau=60.0),
       INS=dict(gravity=9.80665,initPosErr=[0,0,0],initVelErr=[0,0,0],refLat=50.478,refLon=12.365,refH=430),
       Align=dict(enabled=True,duration=10.0,coarseLevel=True,magHeadingSigmaDeg=1.0,
                  coarseMovingSigmaDeg=3.0,applyUserErr=False,userErrDeg=[0,0,5]),
       Fusion=dict(mode='loose',useVel=False,qa=0.05,qg=0.02,qbg=0.002,qba=0.005,
                   p0pos=5.0,p0vel=0.5,p0attDeg=5.0,p0gyroBiasDps=0.5,p0accelBias=0.3,
-                  qScale=1.0,rScale=1.0))
+                  qScale=1.0,rScale=1.0,nisGateBaro=10.83,
+                  useZupt=False,zuptAccelG=0.05,zuptRateDps=3.0,zuptHoldS=1.0,zuptSigma=0.05))
 
 class Engine:
     def __init__(s,cfg):
@@ -353,7 +405,8 @@ class Engine:
         s.c=cfg
         P=dict(cfg['Traj']); P['durationVal']=cfg['Sim']['duration']
         s.traj=make_traj(P['type'],P)
-        s.imu=IMU(cfg); s.gnss=GNSS(cfg); s.ins=INS(); s.insPure=INS(); s.ekf=EKF()
+        s.imu=IMU(cfg); s.gnss=GNSS(cfg); s.baro=Baro(cfg); s.ins=INS(); s.insPure=INS(); s.ekf=EKF()
+        s.zuptRun=0.0; s.zuptCount=0
         s.rs=np.random.default_rng(cfg['Sim']['seed'])
         s.t=0.0; s.k=0; s.istep=0; s.done=False
         s.calBg=np.zeros(3); s.calBa=np.zeros(3)
@@ -397,6 +450,7 @@ class Engine:
         if hasG:
             s.lastGnssP=z['p']
             if z['hasVel']: s.lastGnssV=z['v']
+        hasB,zb=s.baro.update(s.t, s.c['INS']['refH']-truth['p'][2])
 
         if (s.phase=='align' and
                 (s.t-s.align.t0)>=c['Align']['duration']-1e-10*max(1.0,c['Align']['duration'])):
@@ -428,6 +482,23 @@ class Engine:
                 dx=s.ekf.consume()
                 s.ins.correct(dx[0:3],dx[3:6],dx[6:9])
                 s.calBg=s.calBg+dx[9:12]; s.calBa=s.calBa+dx[12:15]
+            if s.fusionOn():
+                if c['Fusion']['useZupt']:
+                    F=c['Fusion']
+                    stationary=(abs(np.linalg.norm(fm)-s.ins.grav)<=F['zuptAccelG']*9.80665 and
+                                np.linalg.norm(wm)<=np.radians(F['zuptRateDps']))
+                    s.zuptRun = s.zuptRun+dt if stationary else 0.0
+                    if stationary and s.zuptRun>=F['zuptHoldS']:
+                        s.ekf.updateVel(np.zeros(3)-s.ins.v, np.eye(3)*F['zuptSigma']**2)
+                        dx=s.ekf.consume()
+                        s.ins.correct(dx[0:3],dx[3:6],dx[6:9])
+                        s.calBg=s.calBg+dx[9:12]; s.calBa=s.calBa+dx[12:15]
+                        s.zuptCount+=1
+                if hasB:
+                    s.ekf.updateBaro(zb['h'], s.c['INS']['refH']-s.ins.p[2], zb['R'])
+                    dx=s.ekf.consume()
+                    s.ins.correct(dx[0:3],dx[3:6],dx[6:9])
+                    s.calBg=s.calBg+dx[9:12]; s.calBa=s.calBa+dx[12:15]
             row['insP']=s.insPure.p.copy(); row['insV']=s.insPure.v.copy(); row['insE']=s.insPure.eul().copy()
             row['fusP']=s.ins.p.copy(); row['fusV']=s.ins.v.copy(); row['fusE']=s.ins.eul().copy()
             row['calBg']=s.calBg.copy(); row['calBa']=s.calBa.copy()

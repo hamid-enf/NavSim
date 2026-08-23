@@ -16,6 +16,9 @@ properties
     windows = zeros(0,2)  % dropout windows [t1 t2; ...]
     lastRate = nan
     lastEnabled = false
+    gmState = zeros(3,1)  % Gauss-Markov correlated error state [m]
+    gmInit = false        % true after the state is drawn from N(0, gmSigma)
+    lastGmT = 0           % wall time of the last GM advance [s]
 end
 
 methods
@@ -47,6 +50,9 @@ methods
         obj.queue = {};
         obj.lastZ = [];
         obj.ndx = 0;
+        obj.gmState = zeros(3,1);
+        obj.gmInit = false;
+        obj.lastGmT = 0;
     end
 
     function w = parseWindows(~, txt)
@@ -86,6 +92,25 @@ methods
         end
     end
 
+    function g = advanceGm(obj, t, c)
+        %ADVANCEGM Stationary Gauss-Markov correlated error (multipath-like).
+        % The state follows x' = exp(-dt/tau)*x + sigma*sqrt(1-exp(-2dt/tau))*w
+        % and is drawn from the stationary distribution N(0, gmSigma) at the
+        % first epoch.  Deliberately NOT reflected in R: modelling mismatch
+        % (overconfident filter vs correlated reality) is the demonstration.
+        if ~obj.gmInit
+            obj.gmState = c.GNSS.gmSigma * randn(3,1);
+            obj.gmInit = true;
+        else
+            dt = max(t - obj.lastGmT, 0);
+            phi = exp(-dt / c.GNSS.gmTau);
+            sig = c.GNSS.gmSigma * sqrt(max(1 - phi^2, 0));
+            obj.gmState = phi * obj.gmState + sig * randn(3,1);
+        end
+        obj.lastGmT = t;
+        g = obj.gmState;
+    end
+
     function [hasMeas, z, evt] = update(obj, t, truth)
         hasMeas = false;  z = [];  evt = '';
         c = obj.cfg;
@@ -104,6 +129,9 @@ methods
                 sH = c.GNSS.posSigmaH * double(c.GNSS.useNoise);
                 sV = c.GNSS.posSigmaV * double(c.GNSS.useNoise);
                 pmeas = truth.p + c.GNSS.biasNed(:) + [sH*randn; sH*randn; sV*randn];
+                if c.GNSS.useGmNoise
+                    pmeas = pmeas + obj.advanceGm(t, c);
+                end
                 isOut = false;
                 if c.GNSS.useOutlier && rand < c.GNSS.outlierProb
                     pmeas = pmeas + c.GNSS.outlierMag * (2*rand(3,1) - 1);
@@ -119,6 +147,9 @@ methods
                 if c.GNSS.enableVel
                     sVel = c.GNSS.velSigma * double(c.GNSS.useNoise);
                     zs.v  = truth.v + sVel * randn(3,1);
+                    if isOut && c.GNSS.outlierVelSigma > 0
+                        zs.v = zs.v + c.GNSS.outlierVelSigma * (2*rand(3,1) - 1);
+                    end
                     zs.Rv = eye(3) * max(sVel, 0.01)^2;
                 else
                     zs.v = []; zs.Rv = [];

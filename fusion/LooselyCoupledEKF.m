@@ -105,6 +105,16 @@ methods
         accepted=obj.kalman(zv,H,Rv*obj.cfg.Fusion.rScale,obj.cfg.Fusion.nisGateVel);
     end
 
+    function accepted=updateBaro(obj,hMeas,hIns,R)
+        %UPDATEBARO Scalar altitude update from a barometric altimeter.
+        % Height error relates to the NED-down position error as
+        % delta_h = -delta_p_D, so H = [0 0 -1 0 ... 0] and the measurement
+        % passed to kalman() is the residual hMeas - hIns.
+        H=[0 0 -1, zeros(1,12)];
+        accepted=obj.kalman(hMeas-hIns,H,R*obj.cfg.Fusion.rScale, ...
+            obj.cfg.Fusion.nisGateBaro);
+    end
+
     function accepted=kalman(obj,z,H,R,gate)
         innov=z(:)-H*obj.x; S=H*obj.P*H'+R;
         rawNIS=real(innov'*(S\innov)); mode=obj.cfg.Fusion.robustMode;

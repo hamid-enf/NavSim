@@ -29,6 +29,9 @@ properties
     gnssFlag     % 1=meas, 2=injected outlier, 3=NIS reject, 4=OOSM unavailable
     gnssTMeas    % physical measurement epoch (distinct from delivery row time)
     gnssOosm     % 1 when delivered out of sequence, 0 in sequence, NaN without delivery
+    baroH        % barometric altitude measurement [m] (NaN without delivery)
+    baroFlag     % 1=accepted, 3=NIS reject, NaN without aiding update
+    zupt         % 0=none, 1=zero-velocity update applied, 2=rejected by gate
     sigP
     sigV
     sigA         % filter 1-sigma pos/vel/att
@@ -53,6 +56,7 @@ methods
         obj.calBg = z3; obj.calBa = z3;
         obj.gnssP = z3; obj.gnssV = z3; obj.gnssFlag = z1;
         obj.gnssTMeas = z1; obj.gnssOosm = z1;
+        obj.baroH = z1; obj.baroFlag = z1; obj.zupt = z1;
         obj.sigP = z3; obj.sigV = z3; obj.sigA = z3;
         obj.innovN = z1; obj.nis = z1; obj.gnssAccepted = z1; obj.oosmCount = z1;
         obj.alignEst = z3; %#ok<*CPROPLC>
@@ -72,6 +76,8 @@ methods
         end
         obj.gnssFlag = [obj.gnssFlag z1]; obj.gnssTMeas = [obj.gnssTMeas z1];
         obj.gnssOosm = [obj.gnssOosm z1];
+        obj.baroH = [obj.baroH z1]; obj.baroFlag = [obj.baroFlag z1];
+        obj.zupt = [obj.zupt z1];
         obj.innovN = [obj.innovN z1]; obj.nis = [obj.nis z1];
         obj.gnssAccepted = [obj.gnssAccepted z1]; obj.oosmCount = [obj.oosmCount z1];
         obj.maxN = obj.maxN + add;
@@ -89,6 +95,7 @@ methods
         obj.calBg(:,i) = s.calBg;    obj.calBa(:,i) = s.calBa;
         obj.gnssP(:,i) = s.gnssP;    obj.gnssV(:,i) = s.gnssV;    obj.gnssFlag(i) = s.gnssFlag;
         obj.gnssTMeas(i) = s.gnssTMeas; obj.gnssOosm(i) = s.gnssOosm;
+        obj.baroH(i) = s.baroH; obj.baroFlag(i) = s.baroFlag; obj.zupt(i) = s.zupt;
         obj.sigP(:,i) = s.sigP;      obj.sigV(:,i) = s.sigV;      obj.sigA(:,i) = s.sigA;
         obj.innovN(i) = s.innovN; obj.nis(i) = s.nis;
         obj.gnssAccepted(i) = s.gnssAccepted; obj.oosmCount(i) = s.oosmCount;
@@ -112,6 +119,8 @@ methods
         d.gnssP = grab(obj.gnssP); d.gnssV = grab(obj.gnssV);
         d.gnssFlag = obj.gnssFlag(1:n); d.gnssTMeas = obj.gnssTMeas(1:n);
         d.gnssOosm = obj.gnssOosm(1:n);
+        d.baroH = obj.baroH(1:n); d.baroFlag = obj.baroFlag(1:n);
+        d.zupt = obj.zupt(1:n);
         d.sigP = grab(obj.sigP); d.sigV = grab(obj.sigV); d.sigA = grab(obj.sigA);
         d.innovN = obj.innovN(1:n); d.nis = obj.nis(1:n);
         d.gnssAccepted = obj.gnssAccepted(1:n); d.oosmCount = obj.oosmCount(1:n);
@@ -135,10 +144,12 @@ methods
             d.gnssP(1,:).', d.gnssP(2,:).', d.gnssP(3,:).', ...
             d.gnssTMeas(:), d.gnssOosm(:), d.gnssFlag(:), d.nis(:), ...
             d.gnssAccepted(:), d.oosmCount(:), ...
+            d.baroH(:), d.baroFlag(:), d.zupt(:), ...
             'VariableNames', {'t','truthN','truthE','truthD','vN','vE','vD', ...
               'rollDeg','pitchDeg','yawDeg','insN','insE','insD', ...
               'fusN','fusE','fusD','gnssN','gnssE','gnssD', ...
-              'gnssTMeas','gnssOosm','gnssFlag','rawNIS','gnssAccepted','oosmCount'});
+              'gnssTMeas','gnssOosm','gnssFlag','rawNIS','gnssAccepted','oosmCount', ...
+              'baroH','baroFlag','zupt'});
         writetable(T, fname);
     end
 end

@@ -30,10 +30,11 @@ runAllTests
 |---|---|
 | Trajectory | 9 مسیر: Straight، Circle، FigureEight، Acceleration، Climb، Descent، Turn، Combined3D، UserDefined (عبارت دلخواه `p(t)`) |
 | IMU | Bias/ARW/VRW/SF/Misalignment + بایاس Gauss–Markov، g-sensitivity، saturation و quantization — همه در Runtime |
-| GNSS | نرخ، نویز H/V، بایاس، سرعت، Dropout، Outlier، delay با epoch فیزیکی مستقل |
+| GNSS | نرخ، نویز H/V، بایاس، سرعت، Dropout، Outlier (موقعیت و سرعت)، delay با epoch فیزیکی مستقل + خطای همبستهٔ Gauss–Markov (مانند multipath) |
 | INS | مکانیزاسیون Quaternion در دو حالت `flat` و **WGS84 local-level**؛ نرخ زمین/ترابرد، Coriolis، coning/sculling و **dt متغیر** |
 | Alignment | Levelling با شتاب‌سنج + قطب‌نما (stub)، خطای اولیه کاربر، نمایش همگرایی |
 | Fusion | ESKF حلقه‌بستهٔ ۱۵ حالته با دینامیک زمین، گسسته‌سازی مرتبهٔ بالاتر، Joseph/reset، NIS robust gating و fixed-lag OOSM |
+| Aiding | Baro (ارتفاع‌سنج بارومتریک با بایاس/نویز/GM) و ZUPT (به‌روزرسانی سرعت صفر در توقف) — همه در Runtime و بهینه برای سناریوهای تونل/بدون GNSS |
 | Error Injection | تب Errors: همه منابع خطا با یک کلیک فعال/غیرفعال |
 | Visualization | Position / Velocity / Attitude / Errors / Sensors + نمای 3D (وسیله، محورهای Body و Nav، مسیرها، نقاط GNSS) |
 | Real-Time | Start / Pause / Stop / Reset / Step، حالت Real-time و Fast، اسلایدر سرعت |
@@ -41,7 +42,7 @@ runAllTests
 | Educational Mode | کلیک روی هر مرحله → توضیح کوتاه: چیست؟ ورودی/خروجی؟ معادله؟ خطاها؟ |
 | Experiments | ۱۰ آزمایش آماده با اجرای Headless و مقایسه‌ی آماری |
 | Logging | ذخیره MAT/CSV + Replay انیمیشنی |
-| Tests | ۱۳ تست MATLAB/Octave (`runAllTests`) + ۸ تست آینهٔ عددی Python |
+| Tests | ۱۴ تست MATLAB/Octave (`runAllTests`) + ۹ تست آینهٔ عددی Python |
 
 ## ساختار پوشه‌ها
 
@@ -53,7 +54,7 @@ NavSim/
   simulation/             defaultConfig.m, SimEngine.m      (موتور بدون گرافیک)
   trajectory/             TrajectoryLibrary.m
   imu/                    IMUModel.m
-  gnss/                   GNSSModel.m
+  gnss/                   GNSSModel.m, BaroModel.m
   ins/                    INSMechanization.m
   alignment/              Alignment.m
   fusion/                 LooselyCoupledEKF.m

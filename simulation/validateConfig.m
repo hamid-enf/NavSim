@@ -10,6 +10,23 @@ for i = 1:numel(required)
     end
 end
 
+% Backward compatibility: configs saved before a feature existed keep
+% working; missing fields fall back to the same disabled-by-default values
+% used by defaultConfig.
+gnssDefaults = struct('useGmNoise',false,'gmSigma',2,'gmTau',30,'outlierVelSigma',0);
+fusionDefaults = struct('nisGateBaro',10.83,'useZupt',false, ...
+    'zuptAccelG',0.05,'zuptRateDps',3,'zuptHoldS',1,'zuptSigma',0.05);
+defaultsList = {gnssDefaults, 'GNSS'; fusionDefaults, 'Fusion'};
+for i = 1:size(defaultsList, 1)
+    sec = defaultsList{i, 2};
+    fn = fieldnames(defaultsList{i, 1});
+    for j = 1:numel(fn)
+        if ~isfield(cfg.(sec), fn{j})
+            cfg.(sec).(fn{j}) = defaultsList{i, 1}.(fn{j});
+        end
+    end
+end
+
 mustScalar(cfg.Sim.dt, 'Sim.dt', 0, inf, false);
 mustScalar(cfg.Sim.duration, 'Sim.duration', 0, inf, false);
 if cfg.Sim.dt <= 0 || cfg.Sim.duration <= 0
@@ -55,12 +72,38 @@ if cfg.GNSS.enabled && cfg.GNSS.rate > (1 / maxDt) * (1 + 1e-12)
         'GNSS.rate (%.3g Hz) exceeds the minimum simulation polling rate (%.3g Hz).', ...
         cfg.GNSS.rate, 1/maxDt);
 end
-for f = {'posSigmaH','posSigmaV','velSigma','outlierMag','delay'}
+for f = {'posSigmaH','posSigmaV','velSigma','outlierMag','delay', ...
+         'gmSigma','gmTau','outlierVelSigma'}
     mustScalar(cfg.GNSS.(f{1}), ['GNSS.' f{1}], 0, inf, false);
+end
+if cfg.GNSS.useGmNoise && cfg.GNSS.gmTau <= 0
+    error('NavSim:InvalidConfig', ...
+        'GNSS.gmTau must be greater than zero when GNSS.useGmNoise is enabled.');
 end
 mustScalar(cfg.GNSS.randDropProb, 'GNSS.randDropProb', 0, 1, false);
 mustScalar(cfg.GNSS.outlierProb, 'GNSS.outlierProb', 0, 1, false);
 
+if ~isfield(cfg, 'Baro') || ~isstruct(cfg.Baro)
+    % Older configs predate baro aiding; default it to disabled.
+    cfg.Baro = struct('enabled',false,'rate',10,'sigma',1,'bias',0, ...
+                      'gmSigma',0,'gmTau',60);
+end
+mustScalar(cfg.Baro.rate, 'Baro.rate', 0, inf, false);
+if cfg.Baro.rate <= 0
+    error('NavSim:InvalidConfig', 'Baro.rate must be greater than zero.');
+end
+for f = {'sigma','bias','gmSigma','gmTau'}
+    mustScalar(cfg.Baro.(f{1}), ['Baro.' f{1}], 0, inf, false);
+end
+if cfg.Baro.gmSigma > 0 && cfg.Baro.gmTau <= 0
+    error('NavSim:InvalidConfig', ...
+        'Baro.gmTau must be greater than zero when Baro.gmSigma is positive.');
+end
+if cfg.Baro.enabled && cfg.Baro.rate > (1 / maxDt) * (1 + 1e-12)
+    error('NavSim:InvalidConfig', ...
+        'Baro.rate (%.3g Hz) exceeds the minimum simulation polling rate (%.3g Hz).', ...
+        cfg.Baro.rate, 1/maxDt);
+end
 mustScalar(cfg.INS.gravity, 'INS.gravity', 0, inf, false);
 if cfg.INS.gravity <= 0
     error('NavSim:InvalidConfig', 'INS.gravity must be greater than zero.');
@@ -92,6 +135,20 @@ end
 mustScalar(cfg.Fusion.oosmLag, 'Fusion.oosmLag', 0, inf, false);
 if cfg.Fusion.useOOSM && cfg.Fusion.oosmLag <= 0
     error('NavSim:InvalidConfig', 'Fusion.oosmLag must be greater than zero when OOSM is enabled.');
+end
+mustScalar(cfg.Fusion.nisGateBaro, 'Fusion.nisGateBaro', 0, inf, false);
+if cfg.Fusion.nisGateBaro == 0
+    error('NavSim:InvalidConfig', 'Fusion.nisGateBaro must be greater than zero.');
+end
+for f = {'zuptAccelG','zuptRateDps','zuptHoldS','zuptSigma'}
+    mustScalar(cfg.Fusion.(f{1}), ['Fusion.' f{1}], 0, inf, false);
+end
+if cfg.Fusion.useZupt
+    if cfg.Fusion.zuptAccelG == 0 || cfg.Fusion.zuptRateDps == 0 || ...
+            cfg.Fusion.zuptSigma == 0
+        error('NavSim:InvalidConfig', ...
+            'Fusion.zuptAccelG/zuptRateDps/zuptSigma must be greater than zero when ZUPT is enabled.');
+    end
 end
 mustChoice(cfg.IMU.biasModel, 'IMU.biasModel', {'randomwalk','gaussmarkov'});
 for f = {'gyroBiasTau','accelBiasTau','gyroSaturationDps','accelSaturationG'}
@@ -136,7 +193,9 @@ bools = { ...
     cfg.INS.useTransportRate, 'INS.useTransportRate';
     cfg.INS.useCoriolis, 'INS.useCoriolis';
     cfg.INS.useConingSculling, 'INS.useConingSculling';
-    cfg.Fusion.useVel, 'Fusion.useVel'; cfg.Fusion.useOOSM, 'Fusion.useOOSM'};
+    cfg.Fusion.useVel, 'Fusion.useVel'; cfg.Fusion.useOOSM, 'Fusion.useOOSM'; ...
+    cfg.GNSS.useGmNoise, 'GNSS.useGmNoise'; cfg.Baro.enabled, 'Baro.enabled'; ...
+    cfg.Fusion.useZupt, 'Fusion.useZupt'};
 for i = 1:size(bools,1)
     v = bools{i,1};
     if ~(islogical(v) && isscalar(v)) && ...

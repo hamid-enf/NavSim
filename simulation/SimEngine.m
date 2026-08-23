@@ -9,6 +9,7 @@ properties
     traj
     imu
     gnss
+    baro               % barometric altimeter model (optional aiding)
     ins
     insPure           % free-running INS, never corrected by the filter
     align
@@ -31,6 +32,8 @@ properties
     oosmTooOld = 0
     gnssRejected = 0
     lastMeasDiag = struct()
+    zuptRun = 0             % consecutive stationary time [s]
+    zuptCount = 0           % accepted zero-velocity updates
     maxN = 1000
     done = false
 end
@@ -51,6 +54,7 @@ methods
         newTraj = TrajectoryLibrary.make(cfg.Traj.type, trajCfg);
         newImu = IMUModel();   newImu.updateParams(cfg);
         newGnss = GNSSModel(); newGnss.updateParams(cfg);
+        newBaro = BaroModel(); newBaro.updateParams(cfg);
         newIns = INSMechanization();
         newInsPure = INSMechanization();
         newAlign = Alignment();
@@ -67,6 +71,7 @@ methods
         obj.traj = newTraj;
         obj.imu = newImu;
         obj.gnss = newGnss;
+        obj.baro = newBaro;
         obj.ins = newIns;
         obj.insPure = newInsPure;
         obj.align = newAlign;
@@ -86,8 +91,10 @@ methods
         runtimeCfg = obj.cfg;
         runtimeCfg.IMU = cfg.IMU;
         runtimeCfg.GNSS = cfg.GNSS;
+        runtimeCfg.Baro = cfg.Baro;
         fusionRuntime = {'mode','useVel','qa','qg','qbg','qba','qScale','rScale', ...
-            'robustMode','nisGatePos','nisGateVel','maxRInflation','useOOSM','oosmLag'};
+            'robustMode','nisGatePos','nisGateVel','maxRInflation','useOOSM','oosmLag', ...
+            'nisGateBaro','useZupt','zuptAccelG','zuptRateDps','zuptHoldS','zuptSigma'};
         for i = 1:numel(fusionRuntime)
             f = fusionRuntime{i};
             runtimeCfg.Fusion.(f) = cfg.Fusion.(f);
@@ -97,6 +104,7 @@ methods
         runtimeCfg = validateConfig(runtimeCfg);
         obj.gnss.updateParams(runtimeCfg, obj.t); % validate windows before mutation
         obj.imu.updateParams(runtimeCfg);
+        obj.baro.updateParams(runtimeCfg);
         obj.cfg = runtimeCfg;
         if oldUseOOSM ~= runtimeCfg.Fusion.useOOSM
             % History starts at the toggle epoch; never reuse a partial
@@ -123,9 +131,11 @@ methods
         rng(obj.cfg.Sim.seed, 'twister');
         obj.imu.reset();
         obj.gnss.reset();
+        obj.baro.reset();
         obj.t = 0; obj.k = 0; obj.istep = 0;
         obj.done = false;
         obj.calibBg = zeros(3,1);  obj.calibBa = zeros(3,1);
+        obj.zuptRun = 0; obj.zuptCount = 0;
         obj.lastGnssP = nan(3,1);  obj.lastGnssV = nan(3,1);
         obj.gnssEvent = '';
         obj.lastSnap = struct();
@@ -217,6 +227,9 @@ methods
             if z.hasVel, obj.lastGnssV = z.v; end
         end
 
+        % ---------- Baro runs every step (may produce a measurement) ---
+        [hasB, zb] = obj.baro.update(obj.t, truth.lla(3));
+
         % Alignment owns samples t < duration.  Initialize navigation at
         % the first actual sample at/after the boundary, not one sample
         % earlier; otherwise every post-alignment state lags Truth by dt.
@@ -239,6 +252,9 @@ methods
             sRow.gnssTMeas = z.tMeas;
             sRow.gnssOosm = double(z.tMeas < obj.t-1e-10);
             if z.hasVel, sRow.gnssV = z.v; end
+        end
+        if hasB   % log baro measurement in every phase
+            sRow.baroH = zb.h;
         end
 
         if strcmp(obj.phase, 'align')
@@ -274,6 +290,24 @@ methods
                 obj.updateLatestHistoryPost();
             end
 
+            % ---------- Current-epoch ZUPT and barometric aiding ------
+            % Order matches the history record order (GNSS, then ZUPT, then
+            % baro) so fixed-lag OOSM replay stays deterministic.
+            if obj.isFusionOn()
+                zFlag = obj.applyZuptIfDue(wm, fm, dt, c);
+                if zFlag > 0, sRow.zupt = zFlag; end
+                if hasB
+                    [bAcc, ~] = obj.applyBaro(zb, c);
+                    if bAcc
+                        sRow.baroFlag = 1;
+                        obj.addHistoryMeasurement(zb, 'baro', c);
+                    else
+                        sRow.baroFlag = 3;
+                    end
+                end
+                obj.updateLatestHistoryPost();
+            end
+
             % ---------- Log state at exactly t (aligned with truth) -----
             % INS trace = free-running pure INS (no filter corrections);
             % Fused trace = feedback-corrected INS.
@@ -295,7 +329,7 @@ methods
         % ---------- Stage 9: Log/snapshot, all consistently at t -------
         obj.k = obj.k + 1;
         obj.log.logRow(obj.k, sRow);
-        obj.lastSnap = obj.buildSnapshot(sRow, truth, wTrue, fTrue, wm, fm, dbg, hasG);
+        obj.lastSnap = obj.buildSnapshot(sRow, truth, wTrue, fTrue, wm, fm, dbg, hasG, hasB);
 
         if strcmp(obj.phase, 'nav')
             % Store the exact raw increment/config so a delayed measurement
@@ -382,9 +416,14 @@ methods (Access = private)
         e=obj.stateHistory{end}; e.post=obj.captureFusedState(); obj.stateHistory{end}=e;
     end
 
-    function addHistoryMeasurement(obj,z)
+    function addHistoryMeasurement(obj,z,type,cfgMeas)
+        %ADDHISTORYMEASUREMENT Record an aiding update for OOSM replay.
+        % type: 'gnss' (default) | 'zupt' | 'baro'.  Replay re-applies each
+        % record with its recorded config in the original order.
         if isempty(obj.stateHistory), return; end
-        rec=struct('z',z,'cfg',obj.cfg);
+        if nargin<3 || isempty(type), type='gnss'; end
+        if nargin<4 || isempty(cfgMeas), cfgMeas=obj.cfg; end
+        rec=struct('type',type,'z',z,'cfg',cfgMeas);
         e=obj.stateHistory{end}; e.measurements{end+1}=rec; obj.stateHistory{end}=e;
     end
 
@@ -420,6 +459,60 @@ methods (Access = private)
         end
     end
 
+    function flag=applyZuptIfDue(obj,wm,fm,dt,c)
+        %APPLYZUPTIFDUE Zero-velocity detection and update at the current epoch.
+        % Detector: |‖f‖-g| below zuptAccelG AND ‖w‖ below zuptRateDps,
+        % sustained for at least zuptHoldS seconds.  The pseudo-measurement
+        % is v=0 with variance zuptSigma^2; gating uses the velocity NIS gate.
+        flag=0;
+        if ~c.Fusion.useZupt, obj.zuptRun=0; return; end
+        stationary = abs(norm(fm)-obj.ins.grav) <= c.Fusion.zuptAccelG*9.80665 && ...
+                     norm(wm) <= deg2rad(c.Fusion.zuptRateDps);
+        if stationary
+            obj.zuptRun=obj.zuptRun+dt;
+        else
+            obj.zuptRun=0;
+        end
+        if ~stationary || obj.zuptRun < c.Fusion.zuptHoldS, return; end
+        zq=struct('v',zeros(3,1),'R',eye(3)*c.Fusion.zuptSigma^2);
+        [accepted,~]=obj.applyZupt(zq,c);
+        if accepted
+            flag=1; obj.zuptCount=obj.zuptCount+1;
+            obj.addHistoryMeasurement(zq,'zupt',c);
+        else
+            flag=2;
+        end
+    end
+
+    function [accepted,d]=applyZupt(obj,z,cfgMeas)
+        if nargin<3, cfgMeas=obj.cfg; end
+        obj.ekf.updateParams(cfgMeas);
+        accepted=obj.ekf.updateVel(z.v-obj.ins.v,z.R);
+        d=struct('innov',obj.ekf.lastInnov,'nis',obj.ekf.lastNIS, ...
+            'rawNIS',obj.ekf.lastRawNIS,'gate',obj.ekf.lastGate,'accepted',accepted);
+        if accepted
+            dx=obj.ekf.consumeDx();
+            obj.ins.correctState(dx(1:3),dx(4:6),dx(7:9));
+            obj.calibBg=obj.calibBg+dx(10:12);
+            obj.calibBa=obj.calibBa+dx(13:15);
+        end
+    end
+
+    function [accepted,d]=applyBaro(obj,z,cfgMeas)
+        %APPLYBARO Barometric altitude update at the current epoch.
+        if nargin<3, cfgMeas=obj.cfg; end
+        obj.ekf.updateParams(cfgMeas);
+        accepted=obj.ekf.updateBaro(z.h,obj.ins.lla(3),z.R);
+        d=struct('innov',obj.ekf.lastInnov,'nis',obj.ekf.lastNIS, ...
+            'rawNIS',obj.ekf.lastRawNIS,'gate',obj.ekf.lastGate,'accepted',accepted);
+        if accepted
+            dx=obj.ekf.consumeDx();
+            obj.ins.correctState(dx(1:3),dx(4:6),dx(7:9));
+            obj.calibBg=obj.calibBg+dx(10:12);
+            obj.calibBa=obj.calibBa+dx(13:15);
+        end
+    end
+
     function [accepted,d]=applyOOSM(obj,z)
         accepted=false;
         d=struct('innov',zeros(3,1),'nis',nan,'rawNIS',nan,'gate',nan, ...
@@ -440,7 +533,7 @@ methods (Access = private)
             obj.oosmRejected=obj.oosmRejected+1; return;
         end
         e=obj.stateHistory{idx};
-        e.measurements{end+1}=struct('z',z,'cfg',obj.cfg); obj.stateHistory{idx}=e;
+        e.measurements{end+1}=struct('type','gnss','z',z,'cfg',obj.cfg); obj.stateHistory{idx}=e;
         % Rebuild every state in the lag window from the historical prior.
         obj.restoreFusedState(e.prior);
         for j=idx:numel(obj.stateHistory)
@@ -450,7 +543,13 @@ methods (Access = private)
             end
             for m=1:numel(hj.measurements)
                 rec=hj.measurements{m};
-                obj.applyMeasurement(rec.z,rec.cfg);
+                if isfield(rec,'type') && strcmp(rec.type,'baro')
+                    obj.applyBaro(rec.z,rec.cfg);
+                elseif isfield(rec,'type') && strcmp(rec.type,'zupt')
+                    obj.applyZupt(rec.z,rec.cfg);
+                else
+                    obj.applyMeasurement(rec.z,rec.cfg);
+                end
             end
             hj.post=obj.captureFusedState(); obj.stateHistory{j}=hj;
             if j<numel(obj.stateHistory)
@@ -495,13 +594,14 @@ methods (Access = private)
         sRow.calBg = obj.calibBg; sRow.calBa = obj.calibBa;
         sRow.gnssP = nan(3,1); sRow.gnssV = nan(3,1); sRow.gnssFlag = nan;
         sRow.gnssTMeas = nan; sRow.gnssOosm = nan;
+        sRow.baroH = nan; sRow.baroFlag = nan; sRow.zupt = 0;
         sRow.sigP = nan(3,1); sRow.sigV = nan(3,1); sRow.sigA = nan(3,1);
         sRow.innovN = nan; sRow.nis = nan; sRow.gnssAccepted = nan;
         sRow.oosmCount = obj.oosmApplied;
         sRow.alignEst = nan(3,1);
     end
 
-    function snap = buildSnapshot(obj, sRow, truth, wT, fT, wm, fm, dbg, hasG)
+    function snap = buildSnapshot(obj, sRow, truth, wT, fT, wm, fm, dbg, hasG, hasB)
         snap = struct();
         snap.phase = obj.phase;
         % This timestamp identifies the state represented by every payload
@@ -519,6 +619,10 @@ methods (Access = private)
         snap.gnss = struct('has', hasG, 'p', obj.lastGnssP, 'v', obj.lastGnssV, ...
             'event', obj.gnssEvent, 'enabled', obj.cfg.GNSS.enabled, ...
             'tMeas',sRow.gnssTMeas,'oosm',sRow.gnssOosm);
+        snap.baro = struct('has', hasB, 'h', sRow.baroH, ...
+            'flag', sRow.baroFlag, 'enabled', obj.cfg.Baro.enabled);
+        snap.zupt = struct('run', obj.zuptRun, 'count', obj.zuptCount, ...
+            'enabled', logical(obj.cfg.Fusion.useZupt));
         if obj.ekf.initialized
             sg = obj.ekf.sigmas();
             d=obj.lastMeasDiag;
