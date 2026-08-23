@@ -94,11 +94,11 @@ python tools/check_ui_config.py
 python tools/run_mirror_tests.py
 ```
 
-آینهٔ فعلی ۸ سناریو را پوشش می‌دهد: تبدیلات و heading مسیرها، Perfect match، drift
-ژیرو/شتاب‌سنج، همگرایی EKF، Alignment، `dt` متغیر، GNSS dropout و رگرسیون تراز زمانی/
-gravity. این دستورها exit-code مناسب CI دارند. تست‌های MATLAB علاوه بر این موارد، زمان‌بندی
-Runtime GNSS، تغییر حالت Fusion، اعتبارسنجی
-Config، همهٔ ۹ مسیر و سازگاری Snapshot زنده را نیز بررسی می‌کنند.
+آینهٔ فعلی ۸ گروه تست را پوشش می‌دهد: تبدیلات و heading مسیرها، Perfect match، drift
+ژیرو/شتاب‌سنج، همگرایی EKF، Alignment، `dt` متغیر، GNSS dropout، مقیاس Q/Bias-RW و
+رگرسیون‌های تراز زمانی، gravity، Descent و Turn. این دستورها exit-code مناسب CI دارند.
+تست‌های MATLAB علاوه بر این موارد، زمان‌بندی Runtime GNSS، تغییر حالت Fusion،
+اعتبارسنجی Config، همهٔ ۹ مسیر و سازگاری Snapshot زنده را نیز بررسی می‌کنند.
 
 > **INS آزاد موازی**: خروجی «INS» همیشه مسیر drift خام (بدون تصحیح فیلتر) را نشان می‌دهد،
 > حتی وقتی Fusion فعال است — مقایسهٔ زندهٔ INS در برابر Fused هستهٔ دمو است.

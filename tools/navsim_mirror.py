@@ -94,18 +94,34 @@ def make_traj(tp, P):
                         np.array([V*np.cos(h0),V*np.sin(h0),-rc]), np.zeros(3))
     elif tp=='Descent':
         rc=P['climbRate']
-        pv = lambda t: (np.array([V*t*np.cos(h0),V*t*np.sin(h0),-(max(alt-rc*t,5))]),
-                        np.array([V*np.cos(h0),V*np.sin(h0),(rc if (alt-rc*t>5) else 0.0)]), np.zeros(3))
+        # No artificial ground clamp: it would create an unmodelled
+        # instantaneous velocity jump and break perfect-IMU consistency.
+        pv = lambda t: (np.array([V*t*np.cos(h0),V*t*np.sin(h0),-alt+rc*t]),
+                        np.array([V*np.cos(h0),V*np.sin(h0),rc]), np.zeros(3))
     elif tp=='Turn':
-        T1=0.3*P.get('durationVal',120); w=np.radians(P['turnRate']); w = w if abs(w)>1e-9 else 1e-9
+        dur=P.get('durationVal',120); T1=0.3*dur; Tr=min(5,max(2,0.2*dur))
+        w=np.radians(P['turnRate']); w = w if abs(w)>1e-9 else 1e-9
+        R0=np.array([[np.cos(h0),-np.sin(h0)],[np.sin(h0),np.cos(h0)]])
         def f(t):
             if t<=T1:
                 return (np.array([V*t*np.cos(h0),V*t*np.sin(h0),-alt]),
                         np.array([V*np.cos(h0),V*np.sin(h0),0.0]), np.zeros(3))
-            tau=t-T1; H=h0+w*tau; p1=np.array([V*T1*np.cos(h0),V*T1*np.sin(h0)])
-            return (np.array([p1[0]+V/w*(np.sin(H)-np.sin(h0)), p1[1]-V/w*(np.cos(H)-np.cos(h0)), -alt]),
-                    np.array([V*np.cos(H),V*np.sin(H),0.0]),
-                    np.array([V*w*-np.sin(H),V*w*np.cos(H),0.0]))
+            tau=t-T1; u=np.clip(tau/Tr,0,1)
+            ss=10*u**3-15*u**4+6*u**5
+            if tau<Tr:
+                sd=(30*u**2-60*u**3+30*u**4)/Tr
+                sdd=(60*u-180*u**2+120*u**3)/(Tr**2)
+            else:
+                sd=0.0; sdd=0.0
+            x=V/w*np.sin(w*tau); y0=V/w*(1-np.cos(w*tau))
+            vx=V*np.cos(w*tau); vy0=V*np.sin(w*tau)
+            ax=-V*w*np.sin(w*tau); ay0=V*w*np.cos(w*tau)
+            xy=np.array([x,y0*ss]); vv=np.array([vx,vy0*ss+y0*sd])
+            aa=np.array([ax,ay0*ss+2*vy0*sd+y0*sdd])
+            p1=np.array([V*T1*np.cos(h0),V*T1*np.sin(h0)])
+            pn=p1+R0@xy; vn=R0@vv; an=R0@aa
+            return (np.array([pn[0],pn[1],-alt]),np.array([vn[0],vn[1],0.0]),
+                    np.array([an[0],an[1],0.0]))
         pv=f
     elif tp=='Combined3D':
         w=V/R; rc=P['climbRate']
@@ -166,8 +182,10 @@ class IMU:
         s.bgRW=np.zeros(3); s.baRW=np.zeros(3); s.rng=np.random.default_rng(s.c['Sim']['seed'])
     def measure(s,wT,fT,dt):
         I=s.c['IMU']
-        if I['gyroBiasRW']>0: s.bgRW += np.radians(I['gyroBiasRW'])*np.sqrt(dt)*s.rng.standard_normal(3)
-        if I['accelBiasRW']>0: s.baRW += I['accelBiasRW']*np.sqrt(dt)*s.rng.standard_normal(3)
+        if I['useGyroBias'] and I['gyroBiasRW']>0:
+            s.bgRW += np.radians(I['gyroBiasRW'])*np.sqrt(dt)*s.rng.standard_normal(3)
+        if I['useAccelBias'] and I['accelBiasRW']>0:
+            s.baRW += I['accelBiasRW']*np.sqrt(dt)*s.rng.standard_normal(3)
         bg=s.bgBase+s.bgRW; ba=s.baBase+s.baRW
         ng = np.radians(I['gyroARWDpsHz'])/np.sqrt(dt)*s.rng.standard_normal(3) if I['useGyroNoise'] else np.zeros(3)
         na = I['accelVRW']/np.sqrt(dt)*s.rng.standard_normal(3) if I['useAccelNoise'] else np.zeros(3)
@@ -242,7 +260,8 @@ class Align:
         s.truthEul0=truth0['eul']; s.yawMagErr=np.radians(A['magHeadingSigmaDeg'])*rng.standard_normal()
         s.coarseErr=np.radians(A.get('coarseMovingSigmaDeg',3.0))*rng.standard_normal(3)
         s.isStatic=(float(np.linalg.norm(truth0['v']))<=1.0 and
-                    float(np.linalg.norm(truth0['a']))<=0.1)
+                    float(np.linalg.norm(truth0['a']))<=0.1 and
+                    float(np.linalg.norm(truth0['eulDot']))<=np.radians(0.1))
         s.estEul=truth0['eul']+np.array([0.5,0.5,1.0])
         s.active=A['enabled'] and A['duration']>0
     def update(s,fm,truth):
@@ -280,7 +299,7 @@ class EKF:
         Fm[3:6,12:15]=-C*dt
         Fm[6:9,9:12]=C*dt   # error = true - est convention
         qa=(s.qa*s.qScale)**2; qg=(np.radians(s.qg)*s.qScale)**2
-        qbg=(np.radians(s.qbg))**2; qba=s.qba**2
+        qbg=(np.radians(s.qbg)*s.qScale)**2; qba=(s.qba*s.qScale)**2
         Qd=np.zeros((15,15))
         Qd[0:3,0:3]=np.eye(3)*qa*dt**3/3
         Qd[0:3,3:6]=np.eye(3)*qa*dt**2/2

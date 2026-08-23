@@ -36,30 +36,42 @@ methods
 
     function configure(obj, cfg)
         cfg = validateConfig(cfg);
-        obj.cfg = cfg;
-        cfg.Traj.durationVal = cfg.Sim.duration;   % used by 'Turn'
-        obj.traj  = TrajectoryLibrary.make(cfg.Traj.type, cfg.Traj);
-        obj.imu   = IMUModel();   obj.imu.updateParams(cfg);
-        obj.gnss  = GNSSModel();  obj.gnss.updateParams(cfg);
-        obj.ins   = INSMechanization();
-        obj.insPure = INSMechanization();
-        obj.align = Alignment();
-        obj.ekf   = LooselyCoupledEKF();
-        obj.refLla = [cfg.INS.refLat; cfg.INS.refLon; cfg.INS.refH];
+
+        % Build/validate every replacement locally first.  If a user-defined
+        % trajectory or GNSS window is invalid, the currently running engine
+        % remains intact instead of being left half-configured.
+        trajCfg = cfg.Traj;
+        trajCfg.durationVal = cfg.Sim.duration;   % used by 'Turn'
+        newTraj = TrajectoryLibrary.make(cfg.Traj.type, trajCfg);
+        newImu = IMUModel();   newImu.updateParams(cfg);
+        newGnss = GNSSModel(); newGnss.updateParams(cfg);
+        newIns = INSMechanization();
+        newInsPure = INSMechanization();
+        newAlign = Alignment();
+        newEkf = LooselyCoupledEKF();
         switch cfg.Sim.variableDt
             case 'jitter'
                 dtMin = cfg.Sim.dt * max(0.2, 1 - cfg.Sim.dtJitter);
             otherwise
                 dtMin = cfg.Sim.dt;
         end
-        obj.maxN = ceil(cfg.Sim.duration / dtMin) + 1000;
-        obj.log = NavLogger(obj.maxN, cfg);
+        newMaxN = ceil(cfg.Sim.duration / dtMin) + 1000;
+
+        obj.cfg = cfg;
+        obj.traj = newTraj;
+        obj.imu = newImu;
+        obj.gnss = newGnss;
+        obj.ins = newIns;
+        obj.insPure = newInsPure;
+        obj.align = newAlign;
+        obj.ekf = newEkf;
+        obj.refLla = [cfg.INS.refLat; cfg.INS.refLon; cfg.INS.refH];
+        obj.maxN = newMaxN;
         obj.resetState();
     end
 
     function applyRuntime(obj, cfg)
         % Hot-update of run-time editable parameters.
-        cfg = validateConfig(cfg);
         oldMode = obj.cfg.Fusion.mode;
         % Only copy sections explicitly documented as runtime-safe.  The UI
         % may also contain pending Trajectory/Sim/INS/Align edits; copying the
@@ -72,6 +84,9 @@ methods
             f = fusionRuntime{i};
             runtimeCfg.Fusion.(f) = cfg.Fusion.(f);
         end
+        % Validate the merged config, not unrelated pending structural edits
+        % in the UI candidate.
+        runtimeCfg = validateConfig(runtimeCfg);
         obj.gnss.updateParams(runtimeCfg, obj.t); % validate windows before mutation
         obj.imu.updateParams(runtimeCfg);
         obj.cfg = runtimeCfg;
@@ -99,6 +114,7 @@ methods
         obj.calibBg = zeros(3,1);  obj.calibBa = zeros(3,1);
         obj.lastGnssP = nan(3,1);  obj.lastGnssV = nan(3,1);
         obj.gnssEvent = '';
+        obj.lastSnap = struct();
         obj.log = NavLogger(obj.maxN, obj.cfg);
         truth0 = obj.traj.fh(0);
         obj.align.reset(obj.cfg, truth0);

@@ -23,7 +23,7 @@ methods (Static)
         d('Acceleration')= 'Straight flight with constant acceleration.';
         d('Climb')       = 'Straight flight with constant climb rate.';
         d('Descent')     = 'Straight flight with constant descent rate.';
-        d('Turn')        = 'Straight leg, then constant-rate turn.';
+        d('Turn')        = 'Straight leg, smooth turn entry, then constant-rate turn.';
         d('Combined3D')  = 'Circle with vertical oscillation and mean climb.';
         d('UserDefined') = 'User NED position expression p(t), numeric derivatives.';
     end
@@ -61,8 +61,11 @@ methods (Static)
                                 [0; 0; 0] );
             case 'Descent'
                 rc = P.climbRate;
-                pv = @(t) deal( [V*t*cos(h0); V*t*sin(h0); -(max(alt - rc*t,5))], ...
-                                [V*cos(h0);   V*sin(h0);   (alt-rc*t>5)*rc  ], ...
+                % Do not clamp at an artificial ground altitude: a hard
+                % clamp makes velocity jump to zero with no acceleration,
+                % so even a perfect IMU can no longer reproduce Truth.
+                pv = @(t) deal( [V*t*cos(h0); V*t*sin(h0); -alt + rc*t], ...
+                                [V*cos(h0);   V*sin(h0);   rc         ], ...
                                 [0; 0; 0] );
             case 'Turn'
                 pv = TrajectoryLibrary.mkTurn(P, h0, V, alt, TrajectoryLibrary.getDur(P));
@@ -140,21 +143,45 @@ methods (Static)
 
     function pv = mkTurn(P, h0, V, alt, dur)
         T1 = 0.3 * dur;
+        Tr = min(5, max(2, 0.2 * dur)); % smooth turn-entry duration [s]
         w  = deg2rad(P.turnRate);
         if abs(w) < 1e-9, w = 1e-9; end
+        R0 = [cos(h0), -sin(h0); sin(h0), cos(h0)];
         function [p, v, a] = f(t)
             if t <= T1
                 p = [V*t*cos(h0); V*t*sin(h0); -alt];
                 v = [V*cos(h0);   V*sin(h0);   0];
                 a = [0; 0; 0];
             else
-                tau = t - T1;   H = h0 + w*tau;
-                p1  = [V*T1*cos(h0); V*T1*sin(h0)];
-                p   = [p1(1) + V/w*(sin(H) - sin(h0));
-                       p1(2) - V/w*(cos(H) - cos(h0));
-                       -alt];
-                v   = [V*cos(H); V*sin(H); 0];
-                a   = [V*w*-sin(H); V*w*cos(H); 0];
+                tau = t - T1;
+                % Start from the exact circular arc, but ramp its lateral
+                % displacement with a quintic smootherstep.  s, sdot and
+                % sddot match [0,0,0] -> [1,0,0], making p/v/a C2 at both
+                % ends and preventing an impossible instantaneous bank jump.
+                u = min(max(tau / Tr, 0), 1);
+                s = 10*u^3 - 15*u^4 + 6*u^5;
+                if tau < Tr
+                    sd  = (30*u^2 - 60*u^3 + 30*u^4) / Tr;
+                    sdd = (60*u - 180*u^2 + 120*u^3) / (Tr^2);
+                else
+                    sd = 0; sdd = 0;
+                end
+                x = V/w * sin(w*tau);
+                y0 = V/w * (1-cos(w*tau));
+                vx = V*cos(w*tau);
+                vy0 = V*sin(w*tau);
+                ax = -V*w*sin(w*tau);
+                ay0 = V*w*cos(w*tau);
+                xy = [x; y0*s];
+                vv = [vx; vy0*s + y0*sd];
+                aa = [ax; ay0*s + 2*vy0*sd + y0*sdd];
+                p1 = [V*T1*cos(h0); V*T1*sin(h0)];
+                pn = p1 + R0 * xy;
+                vn = R0 * vv;
+                an = R0 * aa;
+                p = [pn; -alt];
+                v = [vn; 0];
+                a = [an; 0];
             end
         end
         pv = @f;

@@ -54,8 +54,8 @@ methods
         F(7:9, 10:12) = C * dt;   % error = true - est convention: dphi_dot = +C*dbg
         qa  = (s.qa * s.qScale)^2;                    % (m/s^2)^2/Hz
         qg  = (deg2rad(s.qg) * s.qScale)^2;           % (rad/s)^2/Hz
-        qbg = (deg2rad(s.qbg))^2;
-        qba = s.qba^2;
+        qbg = (deg2rad(s.qbg) * s.qScale)^2;
+        qba = (s.qba * s.qScale)^2;
         Qd = zeros(15);
         Qd(1:3,1:3)     = eye(3) * qa * dt^3 / 3;
         Qd(1:3,4:6)     = eye(3) * qa * dt^2 / 2;

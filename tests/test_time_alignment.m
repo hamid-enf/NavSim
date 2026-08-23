@@ -37,6 +37,10 @@ d = e2.log.slice();
 assert(abs(s.t - d.t(end)) < eps, 'snapshot timestamp does not match log row');
 assert(norm(s.insState.p - d.insP(:,end)) < eps, 'snapshot INS is one step ahead of log/Truth');
 assert(abs(s.engineTime - c2.Sim.dt) < 1e-12, 'snapshot engineTime is incorrect');
+e2.resetState();
+sReset = e2.getSnapshot();
+assert(~isfield(sReset, 'truth') && sReset.engineTime == 0, ...
+    'reset retained a stale live snapshot from the previous run');
 e2.runToEnd();
 d = e2.log.slice();
 assert(abs(e2.t - c2.Sim.duration) < 1e-12, 'engine integrated past requested duration');

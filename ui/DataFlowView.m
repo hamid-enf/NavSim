@@ -55,7 +55,10 @@ methods
     end
 
     function update(obj, snap)
-        if ~isfield(snap, 'truth'), return; end
+        if ~isfield(snap, 'truth')
+            obj.txtVals.Value = {'(waiting for data...)'};
+            return;
+        end
         d2 = @(x) sprintf('%8.2f %8.2f %8.2f', x(1), x(2), x(3));
         v = {};
         v{end+1} = sprintf(' t = %7.2f s   phase = %s   dt = %.4f s', snap.t, snap.phase, snap.dt);

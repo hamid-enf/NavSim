@@ -37,7 +37,18 @@ def t_utils():
     for tp in ('Circle','FigureEight','Combined3D'):
         tr=make_traj(tp,p); q=tr(0)
         assert abs(wrapPi(q['eul'][2]-np.radians(p['heading0']))) < 1e-10
-    print("      utils: conversion and trajectory-heading conventions OK")
+
+    c1=default_config(); c2=copy.deepcopy(c1); c2['Fusion']['qScale']=10
+    e1=EKF(); e1.initState(c1); e1.P[:]=0; e1.predict(np.eye(3),np.zeros(3),1)
+    e2=EKF(); e2.initState(c2); e2.P[:]=0; e2.predict(np.eye(3),np.zeros(3),1)
+    assert abs(e2.P[9,9]/e1.P[9,9]-100)<1e-10, "qScale ignored gyro-bias RW"
+    assert abs(e2.P[12,12]/e1.P[12,12]-100)<1e-10, "qScale ignored accel-bias RW"
+
+    rw=default_config(); rw['IMU']['useGyroBias']=False; rw['IMU']['gyroBiasRW']=1
+    rw['IMU']['useAccelBias']=False; rw['IMU']['accelBiasRW']=1
+    im=IMU(rw); _,_,dbg=im.measure(np.zeros(3),np.zeros(3),1)
+    assert np.linalg.norm(dbg['bg'])==0 and np.linalg.norm(dbg['ba'])==0
+    print("      utils: conversions, headings, qScale and bias-RW toggles OK")
 
 def t_perfect():
     cfg = default_config()
@@ -178,7 +189,21 @@ def t_time_alignment():
     g=Engine(c); g.run(); rg=g.results()
     drift=float(np.nanmax(rg['errPosIns']))
     assert drift<1e-7, f"gravity mismatch drift {drift}"
-    print(f"      timing: first nav t={r['t'][i]:.2f} s; gravity drift={drift:.3g} m")
+
+    d=no_imu_errors(default_config())
+    d['Sim']['duration']=12; d['Traj']['type']='Descent'; d['Traj']['alt0']=10
+    d['Traj']['climbRate']=1; d['GNSS']['enabled']=False; d['Fusion']['mode']='ins'
+    d['Align']['enabled']=False
+    de=Engine(d); de.run(); dr=de.results()
+    descent=float(np.nanmax(dr['errPosIns']))
+    assert descent<0.01, f"perfect-IMU Descent inconsistency {descent}"
+
+    turn=copy.deepcopy(d); turn['Sim']['duration']=20; turn['Traj']['type']='Turn'
+    te=Engine(turn); te.run(); tr=te.results()
+    turn_err=float(np.nanmax(tr['errPosIns']))
+    turn_att=float(np.degrees(np.nanmax(tr['errAttIns'])))
+    assert turn_err<0.2 and turn_att<0.3, f"Turn entry discontinuity {turn_err} m / {turn_att} deg"
+    print(f"      timing: nav={r['t'][i]:.2f}s gravity={drift:.2g} descent={descent:.2g} turn={turn_err:.3g}m")
 
 print("="*60)
 check('test_utils', t_utils)

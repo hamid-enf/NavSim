@@ -1,7 +1,7 @@
 classdef Alignment < handle
 %ALIGNMENT Initial alignment simulation, two physically-honest modes:
 %
-%  STATIC (|v0| <= 1 m/s and |a0| <= 0.1 m/s^2): coarse levelling:
+%  STATIC (low speed, acceleration, and angular rate): coarse levelling:
 %        phi   = atan2(-f_y, -f_z)
 %        theta = atan2( f_x, sqrt(f_y^2+f_z^2))
 %    plus magnetometer heading (true yaw + noise). Estimate converges as
@@ -38,7 +38,8 @@ methods
         % Low initial speed alone is insufficient (e.g. an accelerating
         % trajectory can start from rest).  Levelling is valid only when
         % both translational speed and acceleration are negligible.
-        obj.isStatic  = norm(truth0.v) <= 1.0 && norm(truth0.a) <= 0.1;
+        obj.isStatic  = norm(truth0.v) <= 1.0 && norm(truth0.a) <= 0.1 && ...
+                        norm(truth0.eulDot) <= deg2rad(0.1);
         obj.estEul    = truth0.eul + [0.5; 0.5; 1.0];   % intentionally rough start
         obj.active    = cfg.Align.enabled && cfg.Align.duration > 0;
     end

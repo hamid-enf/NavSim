@@ -42,6 +42,19 @@ mustScalar(cfg.GNSS.rate, 'GNSS.rate', 0, inf, false);
 if cfg.GNSS.rate <= 0
     error('NavSim:InvalidConfig', 'GNSS.rate must be greater than zero.');
 end
+switch cfg.Sim.variableDt
+    case 'jitter'
+        maxDt = cfg.Sim.dt * (1 + cfg.Sim.dtJitter);
+    case 'tworate'
+        maxDt = 4 * cfg.Sim.dt;
+    otherwise
+        maxDt = cfg.Sim.dt;
+end
+if cfg.GNSS.enabled && cfg.GNSS.rate > (1 / maxDt) * (1 + 1e-12)
+    error('NavSim:InvalidConfig', ...
+        'GNSS.rate (%.3g Hz) exceeds the minimum simulation polling rate (%.3g Hz).', ...
+        cfg.GNSS.rate, 1/maxDt);
+end
 for f = {'posSigmaH','posSigmaV','velSigma','outlierMag','delay'}
     mustScalar(cfg.GNSS.(f{1}), ['GNSS.' f{1}], 0, inf, false);
 end

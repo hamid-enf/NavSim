@@ -38,4 +38,14 @@ s = struct('A', struct('b', [1 2 3]));
 s = setByPath(s, 'A.b(2)', 99);
 assert(getByPath(s, 'A.b(2)') == 99, 'set/getByPath');
 
-disp('  utils: conversions OK');
+% qScale must scale every process-noise density, including bias RW terms.
+c1 = defaultConfig(); c1.Fusion.qScale = 1;
+c2 = c1; c2.Fusion.qScale = 10;
+e1 = LooselyCoupledEKF(); e1.initState(c1); e1.P(:) = 0;
+e2 = LooselyCoupledEKF(); e2.initState(c2); e2.P(:) = 0;
+e1.predict(eye(3), zeros(3,1), 1, c1);
+e2.predict(eye(3), zeros(3,1), 1, c2);
+assert(abs(e2.P(10,10) / e1.P(10,10) - 100) < 1e-10, 'qScale ignored gyro-bias RW');
+assert(abs(e2.P(13,13) / e1.P(13,13) - 100) < 1e-10, 'qScale ignored accel-bias RW');
+
+disp('  utils: conversions and process-noise scaling OK');

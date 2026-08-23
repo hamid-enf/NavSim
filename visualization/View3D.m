@@ -94,6 +94,14 @@ methods
     function reset(obj)
         if isempty(obj.trailTrue) || ~isvalid(obj.trailTrue), return; end
         clearpoints(obj.trailTrue); clearpoints(obj.trailEst); clearpoints(obj.gnssPts);
+        if ~isempty(obj.vehPatch) && isvalid(obj.vehPatch)
+            set(obj.vehPatch, 'Vertices', nan(size(obj.Vb)));
+        end
+        for i = 1:numel(obj.bodyAx)
+            if isvalid(obj.bodyAx(i))
+                set(obj.bodyAx(i), 'XData', nan(1,2), 'YData', nan(1,2), 'ZData', nan(1,2));
+            end
+        end
         obj.nTrailed = 0;
     end
 

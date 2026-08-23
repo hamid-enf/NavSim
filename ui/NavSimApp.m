@@ -224,6 +224,10 @@ methods
                 lst{j}.Value = val;  % control type matches the config value type
             end
         end
+        if ~isempty(obj.sldSpeed) && isvalid(obj.sldSpeed)
+            obj.sldSpeed.Value = obj.cfg.Sim.speed;
+            obj.lblSpeed.Text = sprintf('%.1fx', obj.cfg.Sim.speed);
+        end
         obj.syncing = false;
     end
 
@@ -359,9 +363,21 @@ methods
     function onStep(obj, src)
         src.Value = false;
         obj.playing = false;
-        if ~obj.engine.done
-            obj.engine.step();
+        obj.replaying = false;
+        obj.replayData = [];
+        obj.btnReplay.Enable = 'off';
+        obj.btnReplay.Text = 'Replay animation';
+        if obj.dirtyNeedsReset || obj.engine.done
+            try
+                obj.engine.configure(obj.cfg);
+            catch ME
+                obj.msg(['Cannot step: ' ME.message]);
+                return;
+            end
+            obj.pm.clearAll(); obj.v3d.reset(); obj.resetViewBounds();
+            obj.dirtyNeedsReset = false;
         end
+        obj.engine.step();
         obj.refreshViews();
     end
 
@@ -384,7 +400,9 @@ methods
         if strcmp(obj.cfg.Sim.mode, 'fast')
             nStep = max(1, round(obj.cfg.Sim.chunkFast));
         else
-            nStep = max(1, round(0.05 * obj.cfg.Sim.speed / obj.cfg.Sim.dt));
+            % Use the active engine dt; obj.cfg may contain a pending dt edit
+            % that must not affect wall-clock pacing before Reset/Start.
+            nStep = max(1, round(0.05 * obj.cfg.Sim.speed / obj.engine.cfg.Sim.dt));
         end
         for i = 1:nStep
             if obj.engine.done, break; end
@@ -419,7 +437,7 @@ methods
         obj.v3d.update(d);
         snap = obj.engine.getSnapshot();
         obj.dfv.update(snap);
-        obj.lblTime.Text = sprintf('t = %.2f / %.0f s', obj.engine.t, obj.cfg.Sim.duration);
+        obj.lblTime.Text = sprintf('t = %.2f / %.0f s', obj.engine.t, obj.engine.cfg.Sim.duration);
         obj.lblPhase.Text = ['phase: ' obj.engine.phase];
         if obj.cfg.GNSS.enabled
             obj.lblGnss.Text = ['GNSS: ' obj.engine.gnssEvent];
@@ -428,6 +446,8 @@ methods
         end
         if isfield(snap, 'err')
             obj.lblErr.Text = sprintf('|pos err| fused: %.2f m', snap.err.posFus);
+        else
+            obj.lblErr.Text = '|pos err| fused: -';
         end
         drawnow limitrate
     end
@@ -446,6 +466,7 @@ methods
 
     function onExpApply(obj)
         idx = obj.expIndex();
+        obj.playing = false;  % avoid running with a half-old/half-preset config
         obj.cfg = ExperimentPresets.apply(obj.cfg, idx);
         obj.syncUI();
         obj.dirtyNeedsReset = true;
@@ -539,6 +560,9 @@ methods
             obj.msg(['Invalid NavSim log: ' ME.message]);
             return;
         end
+        obj.playing = false;
+        obj.replaying = false;
+        obj.btnReplay.Text = 'Replay animation';
         obj.pm.clearAll(); obj.v3d.reset();
         obj.v3d.setBounds(obj.replayData.truthP);
         obj.pm.update(obj.replayData);
@@ -567,6 +591,10 @@ methods
                 error('field %s must have size 3-by-%d', fn, n);
             end
         end
+        if any(~isfinite(d.truthP(:))) || any(~isfinite(d.truthV(:))) || ...
+                any(~isfinite(d.truthE(:)))
+            error('truth position/velocity/attitude must be finite');
+        end
         if ~isfield(d, 'gnssFlag') || ~isnumeric(d.gnssFlag) || numel(d.gnssFlag) ~= n
             error('field gnssFlag must contain %d samples', n);
         end
@@ -587,6 +615,7 @@ methods
             obj.replaying = false;
             obj.btnReplay.Text = 'Replay animation';
         else
+            obj.playing = false;
             obj.replaying = true;
             obj.replayIdx = 1;
             obj.v3d.reset();

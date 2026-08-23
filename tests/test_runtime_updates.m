@@ -37,6 +37,15 @@ catch ME
 end
 assert(caught, 'malformed dropout window was silently accepted');
 
+% The master bias toggles must also suppress configured/accumulated bias RW.
+rw = defaultConfig();
+rw.IMU.useGyroBias = false; rw.IMU.gyroBiasRW = 1;
+rw.IMU.useAccelBias = false; rw.IMU.accelBiasRW = 1;
+im = IMUModel(); im.updateParams(rw); im.reset();
+[~, ~, dbg] = im.measure(zeros(3,1), zeros(3,1), 1);
+assert(norm(dbg.bg) == 0 && norm(dbg.ba) == 0, ...
+    'disabled bias master toggle still injected bias random walk');
+
 % Runtime switch to INS-only drops stale filter/calibration state and
 % switching back starts with a fresh covariance.
 c3 = defaultConfig(); c3.Align.enabled = false; c3.Sim.duration = 1;
@@ -44,10 +53,13 @@ p0Before = c3.Fusion.p0pos;
 e = SimEngine(c3); e.step();
 e.calibBg = [1;2;3]; e.calibBa = [4;5;6];
 c3.Sim.duration = 0.5;  % pending structural edits must not leak into runtime update
+c3.Sim.dt = 0.05;       % incompatible with 50-Hz GNSS if applied prematurely
+c3.GNSS.rate = 50;
 c3.Fusion.p0pos = 99;
 c3.Fusion.mode = 'ins'; e.applyRuntime(c3);
-assert(e.cfg.Sim.duration == 1 && e.cfg.Fusion.p0pos == p0Before, ...
-    'pending structural/P0 config leaked through runtime update');
+assert(e.cfg.Sim.duration == 1 && e.cfg.Sim.dt == 0.01 && ...
+       e.cfg.Fusion.p0pos == p0Before && e.cfg.GNSS.rate == 50, ...
+    'runtime merge leaked structural/P0 config or rejected a valid merged rate');
 assert(~e.ekf.initialized, 'EKF remained initialized in INS-only mode');
 assert(norm(e.calibBg) == 0 && norm(e.calibBa) == 0, 'INS-only mode retained filter calibration');
 assert(norm(e.ins.p - e.insPure.p) < eps && norm(e.ins.v - e.insPure.v) < eps, ...

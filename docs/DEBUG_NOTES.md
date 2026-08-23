@@ -161,3 +161,51 @@ GUI rendering                 : نیازمند MATLAB R2020b+
 در sandbox دور سوم نصب Octave به‌علت شکست اتصال APT ممکن نشد؛ بنابراین نتیجهٔ ۷/۷ دور
 دوم را نباید به ۱۰ تست جدید تعمیم داد. `runAllTests` آمادهٔ اجرای مستقیم در محیط MATLAB/
 Octave است؛ دستورهای static و Python mirror برای اتصال به CI آماده‌اند.
+
+---
+
+# دور چهارم دیباگ — بازبینی مستقل مجدد
+
+این دور از گزارش‌های قبلی شروع نکرد؛ edge caseهای trajectory، reset/replay، process-noise،
+Bias RW و transactionهای Runtime جداگانه بازتولید شدند.
+
+## یافته‌ها و اصلاحات
+
+1. **Descent از نظر سینماتیکی ناسازگار بود**: clamp ارتفاع در ۵ متر، `vD` را آنی از
+   ۳ به صفر می‌رساند ولی `aD=0` باقی می‌ماند. با IMU کامل در ۶۰ ثانیه خطای موقعیت
+   ≈۷۸۸ m و سرعت ≈۵۵ m/s تولید می‌شد. clamp حذف شد؛ خطای همان سناریو ≈`6e-11 m` است.
+2. **Turn در ورود به پیچ roll/acceleration آنی داشت**: سناریوی perfect-IMU بیست‌ثانیه‌ای
+   به ≈۳۰۶ m / ۴۳.۸ m/s / ۱۸.۵° می‌رسید. ورود پیچ با smootherstep چندجمله‌ای درجه‌پنج C²
+   پیاده شد؛ خطای fixed-dt آینه به ≈۰.۰۵ m و ۰.۱۷° کاهش یافت.
+3. **`Fusion.qScale` روی `qbg/qba` اعمال نمی‌شد**؛ اکنون هر چهار density فرایند را
+   scale می‌کند و تست نسبت covariance برای scale ده‌برابر، نسبت واریانس ۱۰۰ را می‌سنجد.
+4. **خاموش‌کردن Bias، Random Walk را خاموش نمی‌کرد** و RW انباشته پس از toggle باقی
+   می‌ماند. master toggle اکنون constant+RW را با هم کنترل و state انباشته را پاک می‌کند.
+5. **reset، Snapshot قبلی را نگه می‌داشت**؛ `lastSnap` reset و Data Flow به waiting state
+   بازمی‌گردد. وسیله/محورهای 3D مانده از اجرای قبلی نیز در reset پنهان می‌شوند.
+6. **Replay و اجرای زنده هم‌زمان state داشتند**: Load/Replay اکنون اجرای زنده را pause
+   می‌کند؛ پایان replay دیگر simulation قبلی را ناخواسته resume نمی‌کند و سرعت slider در
+   sync preset همگام می‌شود.
+7. **پیکربندی transaction نبود**: خطای UserDefined/GNSS می‌توانست engine موجود را نیمه
+   mutate کند. همهٔ replacementها ابتدا محلی ساخته می‌شوند و فقط پس از موفقیت commit می‌شوند.
+8. **Pending `Sim.dt/duration` روی pacing و label اجرای فعال اثر می‌گذاشت**؛ timer و status
+   اکنون config فعال engine را می‌خوانند و Step نیز pending config را مانند Start اعمال می‌کند.
+9. **نرخ GNSS بالاتر از polling شبیه‌سازی silently undersample می‌شد**؛ validator اکنون
+   با لحاظ jitter/tworate آن را رد می‌کند. Runtime validation روی merged active config انجام
+   می‌شود تا editهای ساختاری pending به‌اشتباه اعمال یا validate نشوند.
+10. **Alignment کم‌سرعت ولی چرخان static تشخیص داده می‌شد**؛ شرط نرخ زاویه‌ای نیز اضافه شد.
+11. Load MAT اکنون finiteness فیلدهای Truth را قبل از bounds/render بررسی می‌کند.
+
+## اعتبارسنجی دور چهارم
+
+```text
+static block/index compatibility : PASS
+UI <-> defaultConfig (95 tag)    : PASS
+Python compileall                : PASS
+numerical mirror                 : 8/8 PASS
+perfect Descent regression       : ~7e-12 m (12 s), ~6e-11 m (60 s)
+perfect Turn regression          : ~0.048 m / 0.166 deg (20 s, fixed dt)
+8 trajectory x 3 dt sweep        : 24/24 finite; no discontinuity/divergence
+MATLAB/Octave suite              : 10 files، assertions جدید اضافه شد؛ binary محلی موجود نیست
+GUI rendering                    : نیازمند MATLAB R2020b+
+```
