@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Rough static sanity checker for MATLAB files (not a full parser)."""
 import os, re, sys
+from pathlib import Path
 
-ROOT = "/home/user/NavSim/../NavSim"
+ROOT = Path(__file__).resolve().parents[1]
 OPENERS = re.compile(r'^\s*(classdef|function|if|for|while|switch|try|methods|properties|events|enumeration|parfor)\b')
 ENDTOK  = re.compile(r'\bend\b')
 
@@ -64,10 +65,14 @@ for dirpath, _, files in os.walk(ROOT):
         stripped = '\n'.join(strip_line(l) for l in src.split('\n'))
         for m in re.finditer(r'\w+\([^()]*\)\s*\(', stripped):
             problems.append(f"{path}: possible call-result indexing -> ...{m.group(0)[:40]}")
+        # d.(field)(:,1:n) works in Octave/newer MATLAB releases but not in
+        # the project's MATLAB R2020b baseline; require an intermediate var.
+        for m in re.finditer(r'\.\(\w+\)\s*\(', stripped):
+            problems.append(f"{path}: chained dynamic-field indexing -> ...{m.group(0)[:40]}")
 
 if problems:
     print("PROBLEMS:")
     for p in problems:
         print(" ", p)
     sys.exit(1)
-print("All .m files passed the static block-balance check.")
+print("All .m files passed block-balance and indexing compatibility checks.")

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Cross-checks: ParamCatalog tags <-> defaultConfig fields; code-ASCII scan."""
 import re, os, sys
+from pathlib import Path
 
-root = "/home/user/NavSim"
+root = Path(__file__).resolve().parents[1]
 
 # --- parse defaultConfig fields: cfg.A.B = ...
-cfg_txt = open(f"{root}/simulation/defaultConfig.m", encoding="utf-8").read()
+cfg_txt = (root / "simulation/defaultConfig.m").read_text(encoding="utf-8")
 fields = {}
 for m in re.finditer(r'cfg\.(\w+)\.(\w+)\s*=\s*([^;]+);', cfg_txt):
     sec, fld, val = m.group(1), m.group(2), m.group(3).strip()
@@ -28,7 +29,7 @@ def tag_ok(tag):
     return True, ""
 
 problems = []
-cat = open(f"{root}/ui/ParamCatalog.m", encoding="utf-8").read()
+cat = (root / "ui/ParamCatalog.m").read_text(encoding="utf-8")
 tags = re.findall(r"'((?:Sim|Traj|IMU|GNSS|INS|Align|Fusion)\.[\w()]+)'", cat)
 for t in sorted(set(tags)):
     ok, why = tag_ok(t)
