@@ -35,8 +35,15 @@ main          % باز شدن GUI
   سوئیچ اصلی Bias، مؤلفهٔ ثابت و مؤلفهٔ stochastic همان سنسور را با هم فعال/غیرفعال می‌کند.
 - **GNSS**: نرخ، نویز، بایاس، سرعت، Dropout (`dropoutText` مثل `'30 60; 90 100'`)، Outlier و Delay. هر نمونه `tMeas` فیزیکی و `tEmit` تحویل مستقل دارد.
   نرخ GNSS نباید از کمترین نرخ polling شبیه‌سازی (با درنظرگرفتن variable dt) بیشتر باشد.
+  **خطای همبستهٔ GM** (`useGmNoise`): خطای Gauss–Markov با σ=gmSigma و τ=gmTau به اندازه‌گیری اضافه می‌شود (مدل سادهٔ multipath).
+  این خطا در R منعکس *نمی‌شود*؛ فیلترِ بدون robust mode دچار بیش‌اطمینانی می‌شود — `robustMode=adaptive|reject` را مقایسه کنید.
+  **Outlier سرعت**: با `outlierVelSigma>0`، دور زدن epoch کامل (موقعیت *و* سرعت) خراب می‌شود.
+- **Baro** (تب جدید): ارتفاع‌سنج بارومتریک با نرخ/نویز/بایاس ثابت و درِف Gauss–Markov.
+  آپدیت اسکالر ارتفاع با گیت NIS مستقل (1 درجه آزادی). برای سناریوهای بدون GNSS (تونل/اتاق پرواز) عمود کانال را کران‌دار می‌کند.
 - **INS & Align**: خطای اولیه، مرجع ژئودتیک، `flat|wgs84`، Earth/transport/Coriolis، coning/sculling و Alignment.
 - **Fusion**: حالت `ins|loose`، چگالی‌های نویز، `P0` و Q/R؛ robust NIS mode/gates، adaptive-R cap و fixed-lag OOSM/window.
+  **ZUPT**: پس از `zuptHoldS` ثانیه سکونِ آشکارشده (`|‖f‖−g| < zuptAccelG` و `‖w‖ < zuptRateDps`)، شبه‌مشاهدهٔ v=0 با σ=zuptSigma هر گام تزریق می‌شود.
+  برای خودرو (توقف پشت چراغ) و پیاده‌روی (PDR) خطای INS را عملاً صفر نگه می‌دارد؛ ستون `zupt` در LOG (1=اعمال، 2=رد گیت).
 - **Errors**: همه‌ی سوئیچ‌های خطا در یک صفحه (برای دمو سریع).
 
 ## 4. نمایش‌ها

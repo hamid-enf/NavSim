@@ -33,7 +33,8 @@
 │     1. TrajectoryLibrary.fh(t)            → reference-tangent trajectory  │
 │     2. earthTruth (WGS84) or flat Truth   → LLA/C/w_ie/w_en/w_ib/f_b      │
 │     3. IMUModel.measure → w_m,f_m (+bias/noise/SF/Mis/GM/g-sens/limits)  │
-│     4. GNSSModel.update → z{tMeas,tEmit} (noise/outlier/dropout/delay)    │
+│     4. GNSSModel.update → z{tMeas,tEmit} (noise/outlier/dropout/delay/GM) │
+│     4b. BaroModel.update → altitude (bias/noise/GM drift) [optional]     │
 │     5. Calibration: w_m-b̂g , f_m-b̂a                                    │
 │     6. robust update at t, or rewind/update/repropagate fixed-lag OOSM   │
 │     7. LOG: state(t), NIS/acceptance/OOSM aligned with delivery row       │
@@ -64,13 +65,14 @@
 - nominal INS غیرخطی است و ESKF فرم استاندارد ۱۵ حالتهٔ local error را نگه می‌دارد. در WGS84، position-error در ECEF-chord/NED مرجع و velocity/attitude-error در NED جاری resolve می‌شوند.
 - transition در high-fidelity تا مرتبهٔ سوم و Q با quadrature گوسی PSD گسسته می‌شود؛ مسیر flat/random-walk گسسته‌سازی legacy را برای compatibility نگه می‌دارد.
 - NIS policyها: `off`، `reject`، و `adaptive` (افزایش R تا سقف `maxRInflation`). position و velocity مستقل gate می‌شوند.
+- **Aiding اضافی (پیش‌فرض خاموش)**: Baro به‌صورت آپدیت اسکالر ارتفاع با `H=[0 0 −1 0…0]` و گیت χ²(1)=10.83؛ ZUPT پس از `zuptHoldS` ثانیه سکون (شرط `|‖f‖−g|<zuptAccelG` و `‖w‖<zuptRateDps`) شبه‌مشاهدهٔ `v=0` با واریانس `zuptSigma²` تزریق می‌کند. هر دو مانند GNSS در تاریخچهٔ OOSM ثبت و در replay به همان ترتیب اعمال می‌شوند (gnss → zupt → baro) تا deterministic بماند.
 - **فیدبک حلقه‌بسته**: `δx` به nominal INS و تخمین بایاس تزریق، covariance با reset Jacobian منتقل، سپس error state صفر می‌شود؛ update از Joseph form استفاده می‌کند.
 - fixed-lag OOSM برای هر epoch، prior/post state، updateهای پذیرفته‌شده، raw IMU interval و config همان interval را نگه می‌دارد؛ delayed GNSS در epoch تاریخی gate و تمام بازه‌های بعدی deterministically replay می‌شوند.
 
 ## 5. توسعه‌پذیری
 
 - مسیر جدید: یک `case` در `TrajectoryLibrary.make`.
-- سنسور جدید (مثلاً Baro/Mag واقعی): کلاس مشابه GNSSModel + آپدیت در آخرین گام قبل از LOG.
+- سنسور جدید (مثلاً Mag واقعی): کلاس مشابه GNSSModel/BaroModel + آپدیت در آخرین گام قبل از LOG (الگوی BaroModel و ثبت در measurements تاریخچه را دنبال کنید).
 - Fusion دیگر (Tightly-coupled/UKF): جایگزینی `LooselyCoupledEKF` با همان رابط
   (`initState/predict/updatePos/consumeDx/sigmas`)؛ موتور تغییر نمی‌کند.
 - UI پارامتر جدید: یک سطر در `ParamCatalog`.

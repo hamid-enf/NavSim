@@ -237,7 +237,8 @@ methods
         oldCfg = obj.cfg;
         newCfg = setByPath(oldCfg, tag, val);
         rtFusion = startsWith(tag, 'Fusion.') && ~startsWith(tag, 'Fusion.p0');
-        rtEngine = startsWith(tag, 'IMU.') || startsWith(tag, 'GNSS.') || rtFusion;
+        rtEngine = startsWith(tag, 'IMU.') || startsWith(tag, 'GNSS.') || ...
+            startsWith(tag, 'Baro.') || rtFusion;
         rtUi = strcmp(tag, 'Sim.mode') || strcmp(tag, 'Sim.chunkFast');
         if rtEngine
             try

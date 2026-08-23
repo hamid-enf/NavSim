@@ -82,6 +82,17 @@ spec = {
 'GNSS','Outlier probability','GNSS.outlierProb','num',[0 1 0.005];
 'GNSS','Outlier magnitude [m]','GNSS.outlierMag','num',[0 500 5];
 'GNSS','Measurement delay [s]','GNSS.delay','num',[0 10 0.1];
+'GNSS','GM correlated noise (multipath-like)','GNSS.useGmNoise','check','';
+'GNSS','GM sigma [m]','GNSS.gmSigma','num',[0 100 0.1];
+'GNSS','GM correlation tau [s]','GNSS.gmTau','num',[1 10000 1];
+'GNSS','Outlier velocity sigma [m/s]','GNSS.outlierVelSigma','num',[0 50 0.1];
+% ---------------- Baro ----------------
+'Baro','Baro aiding enabled','Baro.enabled','check','';
+'Baro','Rate [Hz]','Baro.rate','num',[0.1 100 1];
+'Baro','Noise sigma [m]','Baro.sigma','num',[0 100 0.1];
+'Baro','Bias [m]','Baro.bias','num',[-1000 1000 1];
+'Baro','GM drift sigma [m]','Baro.gmSigma','num',[0 200 0.5];
+'Baro','GM drift tau [s]','Baro.gmTau','num',[1 10000 5];
 % ---------------- INS & Alignment ----------------
 'INS & Align','Gravity [m/s^2]','INS.gravity','num',[9.7 9.9 0.00001];
 'INS & Align','Init pos err N [m]','INS.initPosErr(1)','num',[-1000 1000 0.5];
@@ -127,6 +138,12 @@ spec = {
 'Fusion','Max adaptive R inflation','Fusion.maxRInflation','num',[1 10000 1];
 'Fusion','Fixed-lag delayed GNSS (OOSM)','Fusion.useOOSM','check','';
 'Fusion','OOSM lag window [s]','Fusion.oosmLag','num',[0.1 120 0.1];
+'Fusion','Baro NIS gate (1 DOF)','Fusion.nisGateBaro','num',[0.1 1000 0.1];
+'Fusion','Zero-velocity updates (ZUPT)','Fusion.useZupt','check','';
+'Fusion','ZUPT accel gate [g]','Fusion.zuptAccelG','num',[0.001 1 0.005];
+'Fusion','ZUPT rate gate [deg/s]','Fusion.zuptRateDps','num',[0.1 45 0.1];
+'Fusion','ZUPT hold time [s]','Fusion.zuptHoldS','num',[0 30 0.1];
+'Fusion','ZUPT velocity sigma [m/s]','Fusion.zuptSigma','num',[0.001 5 0.005];
 % ---------------- Errors (master toggles) ----------------
 'Errors','Gyro bias','IMU.useGyroBias','check','';
 'Errors','Accel bias','IMU.useAccelBias','check','';

@@ -216,6 +216,80 @@ def t_time_alignment():
     assert turn_err<0.2 and turn_att<0.3, f"Turn entry discontinuity {turn_err} m / {turn_att} deg"
     print(f"      timing: nav={r['t'][i]:.2f}s gravity={drift:.2g} descent={descent:.2g} turn={turn_err:.3g}m")
 
+
+def t_aiding():
+    import copy
+    # ---------- GM correlated GNSS error: stationary statistics ----------
+    c=default_config()
+    c['GNSS'].update(useNoise=False, biasNed=[0,0,0], useOutlier=False,
+                     rate=10.0, useGmNoise=True, gmSigma=2.0, gmTau=5.0)
+    g=GNSS(c)
+    truth=dict(p=np.zeros(3), v=np.zeros(3))
+    errs=[]
+    t=0.0
+    # NOTE: samples are strongly autocorrelated (tau=5 s, Ts=0.1 s), so the
+    # effective sample count is ~N*(1-rho)/(1+rho); keep N large for a tight
+    # standard-deviation estimate (20000 epochs -> ~200 effective samples).
+    for _ in range(20000):
+        has,z,_=g.update(t,truth)
+        if has: errs.append(z['p']-truth['p'])
+        t+=0.1
+    errs=np.array(errs)
+    std=errs.std(axis=0)
+    assert np.all(np.abs(std-2.0)/2.0 < 0.15), f"GM steady-state std off: {std}"
+    a=errs[:-1].flatten(); b=errs[1:].flatten()
+    rho=float(np.corrcoef(a,b)[0,1])   # lag-1 (0.1 s) correlation ~ exp(-0.1/5)
+    assert abs(rho-np.exp(-0.1/5.0)) < 0.02, f"GM lag-1 autocorrelation off: {rho}"
+    # GM off must reproduce exact noise-free measurements
+    c2=default_config(); c2['GNSS'].update(useNoise=False, biasNed=[0,0,0], rate=10.0)
+    g2=GNSS(c2)
+    for tt in (0.0, 0.1):
+        has,z,_=g2.update(tt,truth)
+        assert has and np.max(np.abs(z['p']-truth['p']))==0.0
+
+    # ---------- GNSS velocity outlier ----------
+    c3=default_config()
+    c3['GNSS'].update(enableVel=True, useNoise=False, useOutlier=True,
+                      outlierProb=1.0, outlierMag=0.0, outlierVelSigma=50.0, rate=10.0)
+    g3=GNSS(c3)
+    en=[]; t=0.0
+    for _ in range(30):
+        has,z,_=g3.update(t,truth)
+        if has and z['hasVel']: en.append(float(np.linalg.norm(z['v']-truth['v'])))
+        t+=0.1
+    assert len(en)==30 and np.mean(en)>15, f"velocity outlier missing (mean {np.mean(en):.2f})"
+
+    # ---------- ZUPT: stationary, GNSS disabled ----------
+    c4=default_config()
+    c4['Traj'].update(type='Straight', speed=0.0)
+    c4['Sim']['duration']=60.0
+    c4['IMU']['accelBiasMg']=[10,-8,10]
+    c4['GNSS']['enabled']=False
+    c4['Align']['enabled']=False
+    c4['Fusion'].update(useZupt=True, zuptHoldS=0.5, zuptSigma=0.05)
+    e4=Engine(c4); e4.run(); r4=e4.results()
+    insMax=float(np.nanmax(r4['errPosIns'])); fusMax=float(np.nanmax(r4['errPosFus']))
+    velMax=float(np.nanmax(r4['errVelFus']))
+    assert insMax>40, f"INS drift unexpectedly small: {insMax:.1f}"
+    assert fusMax<8, f"ZUPT failed to bound position: {fusMax:.2f}"
+    assert velMax<0.3, f"ZUPT failed to pin velocity: {velMax:.3f}"
+    assert e4.zuptCount>500, f"ZUPT fired too rarely: {e4.zuptCount}"
+
+    # ---------- Baro aiding: climbing, GNSS disabled ----------
+    c5=default_config()
+    c5['Traj'].update(type='Climb', speed=10.0, climbRate=3.0)
+    c5['Sim']['duration']=60.0
+    c5['IMU']['accelBiasMg']=[0,0,10]
+    c5['GNSS']['enabled']=False
+    c5['Align']['enabled']=False
+    c5['Baro'].update(enabled=True, sigma=1.0, rate=10.0)
+    e5=Engine(c5); e5.run(); r5=e5.results()
+    insDown=float(abs(r5['insP'][2,-1]-r5['truthP'][2,-1]))
+    fusDown=float(np.nanmax(np.abs(r5['fusP'][2,:]-r5['truthP'][2,:])))
+    assert insDown>40, f"vertical INS drift unexpectedly small: {insDown:.1f}"
+    assert fusDown<8, f"baro failed to bound vertical error: {fusDown:.2f}"
+    print(f"      aiding: GM std={std.mean():.2f}m rho1={rho:.3f}; ZUPT pos {fusMax:.2f}m (INS {insMax:.0f}m, n={e4.zuptCount}); baro down {fusDown:.2f}m (INS {insDown:.0f}m)")
+
 print("="*60)
 check('test_utils', t_utils)
 check('test_perfect_match', t_perfect)
@@ -225,6 +299,7 @@ check('test_alignment', t_align)
 check('test_variable_dt', t_vdt)
 check('test_gnss_dropout', t_dropout)
 check('test_time_alignment', t_time_alignment)
+check('test_aiding', t_aiding)
 print("="*60)
 passed=[r for r in results if r[1]]
 print(f"Result: {len(passed)}/{len(results)} passed")

@@ -67,7 +67,19 @@ cfg.GNSS.randDropProb = 0;         % per-epoch random dropout probability
 cfg.GNSS.useOutlier   = false;
 cfg.GNSS.outlierProb  = 0.02;      % per-epoch outlier probability
 cfg.GNSS.outlierMag   = 50;        % outlier magnitude [m]
+cfg.GNSS.outlierVelSigma = 0;      % outlier velocity error scale [m/s], 0 = off
 cfg.GNSS.delay        = 0;         % measurement delay [s]
+cfg.GNSS.useGmNoise   = false;     % Gauss-Markov correlated (multipath-like) error
+cfg.GNSS.gmSigma      = 2;         % GM steady-state 1-sigma per axis [m]
+cfg.GNSS.gmTau        = 30;        % GM correlation time [s]
+
+% ---------------- Barometric altimeter (altitude aiding) ----------------
+cfg.Baro.enabled = false;   % feed altitude measurements into the fusion filter
+cfg.Baro.rate    = 10;      % measurement rate [Hz]
+cfg.Baro.sigma   = 1;       % white noise 1-sigma [m]
+cfg.Baro.bias    = 0;       % constant bias [m]
+cfg.Baro.gmSigma = 0;       % Gauss-Markov pressure-drift 1-sigma [m]
+cfg.Baro.gmTau   = 60;      % GM correlation time [s]
 
 % ---------------- INS ----------------
 cfg.INS.gravity    = 9.80665;
@@ -114,4 +126,11 @@ cfg.Fusion.nisGateVel    = 16.27;
 cfg.Fusion.maxRInflation = 100;      % adaptive-mode cap before rejection
 cfg.Fusion.useOOSM       = true;
 cfg.Fusion.oosmLag       = 12;       % retained fixed-lag history [s]
+cfg.Fusion.nisGateBaro   = 10.83;    % chi-square, 1 DOF (~99.9%), baro altitude
+% Zero-velocity updates (ZUPT) while the platform is detected stationary
+cfg.Fusion.useZupt       = false;    % enable zero-velocity aiding
+cfg.Fusion.zuptAccelG    = 0.05;     % |f|-magnitude stationarity gate [g]
+cfg.Fusion.zuptRateDps   = 3;        % rate-magnitude stationarity gate [deg/s]
+cfg.Fusion.zuptHoldS     = 1;        % stationarity hold time before firing [s]
+cfg.Fusion.zuptSigma     = 0.05;     % assumed ZUPT velocity sigma [m/s]
 end
