@@ -11,3 +11,8 @@ octave-workspace
 # NavSim user exports (keep generated logs out of source control)
 navlog*.mat
 navlog*.csv
+
+# Educational video build artifacts (final render lives in GitHub Releases)
+video/*.mp4
+video/*.wav
+video/__pycache__/
