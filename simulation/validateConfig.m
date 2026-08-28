@@ -13,10 +13,19 @@ end
 % Backward compatibility: configs saved before a feature existed keep
 % working; missing fields fall back to the same disabled-by-default values
 % used by defaultConfig.
-gnssDefaults = struct('useGmNoise',false,'gmSigma',2,'gmTau',30,'outlierVelSigma',0);
+gnssDefaults = struct('useGmNoise',false,'gmSigma',2,'gmTau',30,'outlierVelSigma',0, ...
+    'useSatGeometry',false,'satCount',6,'sig0',1,'satPeriod',45);
 fusionDefaults = struct('nisGateBaro',10.83,'useZupt',false, ...
     'zuptAccelG',0.05,'zuptRateDps',3,'zuptHoldS',1,'zuptSigma',0.05);
-defaultsList = {gnssDefaults, 'GNSS'; fusionDefaults, 'Fusion'};
+alignDefaults = struct('headingModel','magStub','magDeclinationDeg',5, ...
+    'magFieldT',50e-6,'magInclinationDeg',60,'magNoiseT',4e-7, ...
+    'magBiasT',0,'gyrocompassTau',15);
+gnss2Defaults = struct('enabled',false,'rate',1,'useNoise',true, ...
+    'posSigmaH',4,'posSigmaV',8,'enableVel',false,'velSigma',0.1, ...
+    'biasNed',[0 0 0],'delay',0.5);
+plotDefaults = struct('showSigmaBands',true,'showGnssAnnotations',true);
+defaultsList = {gnssDefaults, 'GNSS'; fusionDefaults, 'Fusion'; ...
+    alignDefaults, 'Align'; gnss2Defaults, 'GNSS2'; plotDefaults, 'Plot'};
 for i = 1:size(defaultsList, 1)
     sec = defaultsList{i, 2};
     fn = fieldnames(defaultsList{i, 1});
@@ -82,6 +91,37 @@ if cfg.GNSS.useGmNoise && cfg.GNSS.gmTau <= 0
 end
 mustScalar(cfg.GNSS.randDropProb, 'GNSS.randDropProb', 0, 1, false);
 mustScalar(cfg.GNSS.outlierProb, 'GNSS.outlierProb', 0, 1, false);
+mustScalar(cfg.GNSS.satCount, 'GNSS.satCount', 4, 24, true);
+mustScalar(cfg.GNSS.sig0, 'GNSS.sig0', 0, inf, false);
+mustScalar(cfg.GNSS.satPeriod, 'GNSS.satPeriod', 0, inf, false);
+if cfg.GNSS.useSatGeometry
+    if cfg.GNSS.satPeriod <= 0
+        error('NavSim:InvalidConfig', ...
+            'GNSS.satPeriod must be greater than zero when useSatGeometry is on.');
+    end
+    if cfg.GNSS.rate * cfg.GNSS.satPeriod < 2
+        error('NavSim:InvalidConfig', ...
+            ['GNSS: at least 2 epochs per satellite period are needed ' ...
+             '(rate * satPeriod >= 2).']);
+    end
+end
+
+% ---------------- second GNSS receiver ----------------
+if ~isfield(cfg, 'GNSS2') || ~isstruct(cfg.GNSS2)
+    cfg.GNSS2 = gnss2Defaults;
+end
+mustScalar(cfg.GNSS2.rate, 'GNSS2.rate', 0, inf, false);
+if cfg.GNSS2.rate <= 0
+    error('NavSim:InvalidConfig', 'GNSS2.rate must be greater than zero.');
+end
+for f = {'posSigmaH','posSigmaV','velSigma','delay'}
+    mustScalar(cfg.GNSS2.(f{1}), ['GNSS2.' f{1}], 0, inf, false);
+end
+if cfg.GNSS2.enabled && cfg.GNSS2.rate > (1 / maxDt) * (1 + 1e-12)
+    error('NavSim:InvalidConfig', ...
+        'GNSS2.rate (%.3g Hz) exceeds the minimum simulation polling rate (%.3g Hz).', ...
+        cfg.GNSS2.rate, 1/maxDt);
+end
 
 if ~isfield(cfg, 'Baro') || ~isstruct(cfg.Baro)
     % Older configs predate baro aiding; default it to disabled.
@@ -119,6 +159,31 @@ mustChoice(cfg.INS.earthModel, 'INS.earthModel', {'flat','wgs84'});
 mustScalar(cfg.Align.duration, 'Align.duration', 0, inf, false);
 mustScalar(cfg.Align.magHeadingSigmaDeg, 'Align.magHeadingSigmaDeg', 0, inf, false);
 mustScalar(cfg.Align.coarseMovingSigmaDeg, 'Align.coarseMovingSigmaDeg', 0, inf, false);
+mustChoice(cfg.Align.headingModel, 'Align.headingModel', ...
+    {'magnetometer','gyrocompass','magStub'});
+mustScalar(cfg.Align.magDeclinationDeg, 'Align.magDeclinationDeg', -180, 180, false);
+mustScalar(cfg.Align.magFieldT, 'Align.magFieldT', 0, inf, false);
+if cfg.Align.headingModel == 'magnetometer' && cfg.Align.magFieldT <= 0
+    error('NavSim:InvalidConfig', ...
+        'Align.magFieldT must be greater than zero for the magnetometer model.');
+end
+mustScalar(cfg.Align.magInclinationDeg, 'Align.magInclinationDeg', -90, 90, false);
+if abs(cfg.Align.magInclinationDeg) >= 90
+    error('NavSim:InvalidConfig', ...
+        'Align.magInclinationDeg must be strictly between -90 and 90 degrees.');
+end
+mustScalar(cfg.Align.magNoiseT, 'Align.magNoiseT', 0, inf, false);
+mustScalar(cfg.Align.magBiasT, 'Align.magBiasT', 0, inf, false);
+mustScalar(cfg.Align.gyrocompassTau, 'Align.gyrocompassTau', 0, inf, false);
+if cfg.Align.headingModel == 'gyrocompass' && cfg.Align.gyrocompassTau <= 0
+    error('NavSim:InvalidConfig', ...
+        'Align.gyrocompassTau must be greater than zero for the gyrocompass model.');
+end
+
+% ---------------- plot annotations ----------------
+if ~isfield(cfg, 'Plot') || ~isstruct(cfg.Plot)
+    cfg.Plot = plotDefaults;
+end
 
 mustChoice(cfg.Fusion.mode, 'Fusion.mode', {'ins','loose'});
 mustChoice(cfg.Fusion.robustMode, 'Fusion.robustMode', {'off','reject','adaptive'});
@@ -169,6 +234,7 @@ vectors = { ...
     cfg.IMU.accelSFPpm, 'IMU.accelSFPpm';
     cfg.IMU.accelMisDeg, 'IMU.accelMisDeg';
     cfg.GNSS.biasNed, 'GNSS.biasNed';
+    cfg.GNSS2.biasNed, 'GNSS2.biasNed';
     cfg.INS.initPosErr, 'INS.initPosErr';
     cfg.INS.initVelErr, 'INS.initVelErr';
     cfg.Align.userErrDeg, 'Align.userErrDeg';
@@ -195,7 +261,12 @@ bools = { ...
     cfg.INS.useConingSculling, 'INS.useConingSculling';
     cfg.Fusion.useVel, 'Fusion.useVel'; cfg.Fusion.useOOSM, 'Fusion.useOOSM'; ...
     cfg.GNSS.useGmNoise, 'GNSS.useGmNoise'; cfg.Baro.enabled, 'Baro.enabled'; ...
-    cfg.Fusion.useZupt, 'Fusion.useZupt'};
+    cfg.Fusion.useZupt, 'Fusion.useZupt'; ...
+    cfg.GNSS.useSatGeometry, 'GNSS.useSatGeometry'; ...
+    cfg.GNSS2.enabled, 'GNSS2.enabled'; cfg.GNSS2.useNoise, 'GNSS2.useNoise'; ...
+    cfg.GNSS2.enableVel, 'GNSS2.enableVel'; ...
+    cfg.Plot.showSigmaBands, 'Plot.showSigmaBands'; ...
+    cfg.Plot.showGnssAnnotations, 'Plot.showGnssAnnotations'};
 for i = 1:size(bools,1)
     v = bools{i,1};
     if ~(islogical(v) && isscalar(v)) && ...

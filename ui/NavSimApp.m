@@ -47,6 +47,11 @@ properties
     txtLog
     txtLogInfo
     btnReplay
+    labels = containers.Map('KeyType','char','ValueType','any')
+    baseLabel = containers.Map('KeyType','char','ValueType','any')
+    baseColor = containers.Map('KeyType','char','ValueType','any')
+    sldScrub
+    lblScrub
 end
 
 methods
@@ -107,7 +112,16 @@ methods
             for j = 1:numel(rows)
                 row = spec(rows(j), :);
                 label = row{2}; tag = row{3}; typ = row{4}; extra = row{5};
-                uilabel(g, 'Text', label, 'HorizontalAlignment', 'right', 'FontSize', 10);
+                lab = uilabel(g, 'Text', label, 'HorizontalAlignment', 'right', 'FontSize', 10);
+                llst = {};
+                if isKey(obj.labels, tag), llst = obj.labels(tag); end
+                llst{end+1} = lab; obj.labels(tag) = llst;
+                blst = {};
+                if isKey(obj.baseLabel, tag), blst = obj.baseLabel(tag); end
+                blst{end+1} = label; obj.baseLabel(tag) = blst;
+                clst = {};
+                if isKey(obj.baseColor, tag), clst = obj.baseColor(tag); end
+                clst{end+1} = lab.FontColor; obj.baseColor(tag) = clst;
                 obj.makeControl(g, tag, typ, extra);
             end
         end
@@ -200,14 +214,23 @@ methods
 
     function buildLogsTab(obj, ltg)
         tab = uitab(ltg, 'Title', 'Logs');
-        g = uigridlayout(tab, [9 1]);
-        g.RowHeight = {26, 26, 26, 26, 60, '1x', 4, 4, 4};
+        g = uigridlayout(tab, [12 1]);
+        g.RowHeight = {26, 26, 26, 26, 26, 26, 30, 4, 60, '1x', 4, 4};
         g.Scrollable = 'on';
         uibutton(g, 'push', 'Text', 'Save log MAT...', 'ButtonPushedFcn', @(~,~) obj.onSaveMat());
         uibutton(g, 'push', 'Text', 'Save log CSV...', 'ButtonPushedFcn', @(~,~) obj.onSaveCsv());
         uibutton(g, 'push', 'Text', 'Load MAT & view...', 'ButtonPushedFcn', @(~,~) obj.onLoadMat());
         obj.btnReplay = uibutton(g, 'push', 'Text', 'Replay animation', ...
             'ButtonPushedFcn', @(~,~) obj.onReplayToggle(), 'Enable', 'off');
+        uibutton(g, 'push', 'Text', 'Save config preset...', ...
+            'ButtonPushedFcn', @(~,~) obj.onSavePreset());
+        uibutton(g, 'push', 'Text', 'Load config preset...', ...
+            'ButtonPushedFcn', @(~,~) obj.onLoadPreset());
+        uilabel(g, 'Text', 'Scrub loaded log (time position):', 'FontSize', 9);
+        obj.sldScrub = uislider(g, 'Limits', [0 1], 'Value', 1, 'Enable', 'off', ...
+            'ToolTip', 'Moves the plot cursor through a loaded log', ...
+            'ValueChangedFcn', @(src,~) obj.onScrub(src.Value));
+        obj.lblScrub = uilabel(g, 'Text', 'scrub: -', 'FontSize', 9);
         obj.txtLogInfo = uitextarea(g, 'Editable', 'off', 'FontSize', 9, 'Value', {'No log yet.'});
         obj.txtLog = uitextarea(g, 'Editable', 'off', 'FontSize', 9, ...
             'Value', {'--- event log ---'});
@@ -230,6 +253,7 @@ methods
             obj.lblSpeed.Text = sprintf('%.1fx', obj.cfg.Sim.speed);
         end
         obj.syncing = false;
+        obj.updateDirtyBadges();
     end
 
     function onParam(obj, tag, val)
@@ -238,7 +262,7 @@ methods
         newCfg = setByPath(oldCfg, tag, val);
         rtFusion = startsWith(tag, 'Fusion.') && ~startsWith(tag, 'Fusion.p0');
         rtEngine = startsWith(tag, 'IMU.') || startsWith(tag, 'GNSS.') || ...
-            startsWith(tag, 'Baro.') || rtFusion;
+            startsWith(tag, 'GNSS2.') || startsWith(tag, 'Baro.') || rtFusion;
         rtUi = strcmp(tag, 'Sim.mode') || strcmp(tag, 'Sim.chunkFast');
         if rtEngine
             try
@@ -269,6 +293,7 @@ methods
             obj.dirtyNeedsReset = true;
             obj.msg(['Pending (applies on Reset/Start): ' tag]);
         end
+        obj.updateDirtyBadges();
         if startsWith(tag, 'Traj.') || strcmp(tag, 'Sim.duration')
             % update 3D bounds preview only when not running
             if ~obj.playing, obj.resetViewBounds(); end
@@ -337,6 +362,7 @@ methods
                 return;
             end
         end
+        obj.sldScrub.Enable = 'off';
         obj.realtimeBudget = 0;
         obj.playing = true;
         obj.msg('Running...');
@@ -350,6 +376,7 @@ methods
 
     function onStop(obj)
         obj.playing = false;
+        obj.autoSavePreset();
         obj.msg('Stopped (data kept; Reset to restart).');
     end
 
@@ -371,6 +398,7 @@ methods
         obj.replayData = [];
         obj.btnReplay.Enable = 'off';
         obj.btnReplay.Text = 'Replay animation';
+        obj.sldScrub.Enable = 'off';
         obj.realtimeBudget = 0;
         obj.pm.clearAll(); obj.v3d.reset(); obj.resetViewBounds();
         obj.dirtyNeedsReset = false;
@@ -475,10 +503,12 @@ methods
             sprintf('GNSS meas: %d', sum(~isnan(d.gnssFlag))), ...
             'Use Save MAT/CSV to export.'};
         obj.btnReplay.Enable = 'on';
+        obj.autoSavePreset();
     end
 
     function refreshViews(obj)
         d = obj.engine.log.slice();
+        obj.pm.setCfg(obj.cfg);
         obj.pm.update(d);
         obj.v3d.update(d);
         snap = obj.engine.getSnapshot();
@@ -517,6 +547,7 @@ methods
         obj.btnReplay.Text = 'Replay animation';
         obj.cfg = ExperimentPresets.apply(obj.cfg, idx);
         obj.syncUI();
+        obj.updateDirtyBadges();
         obj.dirtyNeedsReset = true;
         obj.msg(sprintf('Experiment %d applied. Press Start to watch.', idx));
         obj.logMsg(sprintf('Experiment %d applied to config.', idx));
@@ -530,7 +561,34 @@ methods
         rows = {};
         hold(obj.axExp, 'on');
         try
-        if idx == 8
+        if idx == 15 || idx == 16
+            obj.axExp.YScale = 'linear';
+            if idx == 15
+                obj.msg(sprintf('Monte Carlo: running 20 seeds...')); drawnow;
+                r = MonteCarlo.run(cfgE, 20, 1000);
+                MonteCarlo.plotCDF(r, obj.axExp);
+                m = r.summary;
+                rows = {'MC n=20 (current cfg)', m.meanRmsFus, m.p95FinFus, ...
+                        m.meanFinFus, m.meanAttFus};
+                obj.msg(sprintf('Monte Carlo done: mean final err %.2f m, p95 %.2f m.', ...
+                    m.meanFinFus, m.p95FinFus));
+            else
+                obj.msg(sprintf('Monte Carlo: running 2x20 seeds (INS vs loose)...')); drawnow;
+                r1 = MonteCarlo.run(cfgE, 20, 1000);
+                cfgL = cfgE; cfgL.Fusion.mode = 'loose';
+                r2 = MonteCarlo.run(cfgL, 20, 1000);
+                MonteCarlo.plotCDF2(r1, r2, obj.axExp);
+                rows = {'16a INS Only (20 runs)', r1.summary.meanRmsIns, r1.summary.p95FinFus, ...
+                        r1.summary.meanFinFus, r1.summary.meanAttFus; ...
+                        '16b GNSS/INS (20 runs)', r2.summary.meanRmsFus, r2.summary.p95FinFus, ...
+                        r2.summary.meanFinFus, r2.summary.meanAttFus};
+                obj.msg(sprintf('Monte Carlo done: INS p95 %.1f m vs Fused p95 %.2f m.', ...
+                    r1.summary.p95FinFus, r2.summary.p95FinFus));
+            end
+            obj.tblExp.Data = [obj.tblExpData(); rows];
+            obj.logMsg(sprintf('Monte Carlo experiment %d finished.', idx));
+            return;
+        elseif idx == 8
             r1 = ExperimentPresets.runHeadless(cfgE);
             cfgE.Fusion.mode = 'loose';
             r2 = ExperimentPresets.runHeadless(cfgE);
@@ -543,6 +601,7 @@ methods
             legend(obj.axExp, 'show');
             obj.msg('Experiment 8 done: INS Only vs GNSS/INS.');
         else
+            obj.axExp.YScale = 'log';
             r = ExperimentPresets.runHeadless(cfgE);
             m = ExperimentPresets.metrics(r);
             rows = {sprintf('Exp %d', idx), m.rmsPosFus, m.maxPosFus, m.finPosFus, m.rmsAttDegF};
@@ -556,10 +615,21 @@ methods
             obj.logMsg(['Experiment failed: ' ME.message]);
             return;
         end
-        cur = obj.tblExp.Data;
+        cur = obj.tblExpData();
         if isempty(cur), cur = {}; end
         obj.tblExp.Data = [cur; rows];
         obj.logMsg(sprintf('Experiment %d finished (headless).', idx));
+    end
+
+    function cur = tblExpData(obj)
+        % uitable returns a table or {} depending on content; normalize.
+        d = obj.tblExp.Data;
+        if isempty(d), cur = {}; return; end
+        if istable(d)
+            cur = cell(d);
+        else
+            cur = d;
+        end
     end
 
     function plotErr(obj, res, nm, c)
@@ -616,6 +686,8 @@ methods
         obj.pm.update(obj.replayData);
         obj.v3d.update(obj.replayData);
         obj.btnReplay.Enable = 'on';
+        obj.sldScrub.Enable = 'on';
+        obj.sldScrub.Value = 1;
         obj.msg(['Loaded ' f ' — press Replay animation.']);
     end
 
@@ -687,6 +759,128 @@ methods
             obj.btnReplay.Text = 'Replay animation';
         end
         drawnow limitrate
+    end
+
+    function updateDirtyBadges(obj)
+        % Mark every parameter label that differs from defaultConfig().
+        def = defaultConfig();
+        ks = keys(obj.labels);
+        for i = 1:numel(ks)
+            tag = ks{i};
+            if ~isKey(obj.controls, tag), continue; end
+            try
+                cur = getByPath(obj.cfg, tag);
+                defv = getByPath(def, tag);
+            catch
+                continue;
+            end
+            changed = ~valueEq(cur, defv);
+            llst = obj.labels(tag);
+            blst = obj.baseLabel(tag);
+            clst = obj.baseColor(tag);
+            for j = 1:numel(llst)
+                if changed
+                    llst{j}.Text = [blst{j} '  \u2260'];
+                    llst{j}.FontColor = [0.85 0.45 0.0];
+                else
+                    llst{j}.Text = blst{j};
+                    llst{j}.FontColor = clst{j};
+                end
+            end
+        end
+    end
+
+    function tf = valueEq(a, b)
+        if islogical(a) || islogical(b)
+            tf = isequal(logical(a), logical(b));
+        elseif isnumeric(a) && isnumeric(b)
+            tf = isequal(size(a), size(b)) && ...
+                max(abs(a(:) - b(:))) <= 1e-12 * max(1, max(abs(b(:))));
+        elseif ischar(a) || isstring(a)
+            tf = strcmp(char(a), char(b));
+        else
+            tf = isequal(a, b);
+        end
+    end
+
+    function onSavePreset(obj)
+        [f, p] = uiputfile('preset.mat', 'Save config preset (MAT)');
+        if isequal(f, 0), return; end
+        save(fullfile(p, f), 'cfg', '-v7');
+        obj.logMsg(['Saved config preset: ' f]);
+    end
+
+    function onLoadPreset(obj)
+        [f, p] = uigetfile('*.mat', 'Load config preset');
+        if isequal(f, 0), return; end
+        try
+            s = load(fullfile(p, f), 'cfg');
+        catch ME
+            obj.msg(['Could not load preset: ' ME.message]);
+            return;
+        end
+        if ~isfield(s, 'cfg')
+            obj.msg('Not a NavSim config preset (missing cfg).');
+            return;
+        end
+        try
+            s.cfg = validateConfig(s.cfg);
+        catch ME
+            obj.msg(['Preset rejected: ' ME.message]);
+            return;
+        end
+        obj.playing = false;
+        obj.cfg = s.cfg;
+        obj.syncUI();
+        obj.updateDirtyBadges();
+        obj.dirtyNeedsReset = true;
+        obj.msg(['Loaded preset ' f ' — press Start to run it.']);
+        obj.logMsg(['Loaded config preset: ' f]);
+    end
+
+    function onScrub(obj, v)
+        if isempty(obj.replayData), return; end
+        d = obj.replayData;
+        i = max(1, min(d.n, 1 + round(v * (d.n - 1))));
+        obj.pm.update(obj.scrubSlice(d, i));
+        obj.lblScrub.Text = sprintf('scrub t = %.1f s', d.t(min(i, d.n)));
+    end
+
+    function sub = scrubSlice(~, d, i)
+        sub = d; sub.n = i;
+        f3 = {'truthP','truthV','truthE','insP','insV','insE','fusP','fusV','fusE', ...
+              'gnssP','gnss2P','gnssV','calBg','calBa','gyroT','gyroM','accT','accM', ...
+              'alignEst','sigP','sigV','sigA','errPosFus','errPosIns'};
+        for k = 1:numel(f3)
+            fn = f3{k};
+            if isfield(d, fn) && size(d.(fn), 2) >= i
+                tmp = d.(fn);
+                sub.(fn) = tmp(:, 1:i);
+            end
+        end
+        f1 = {'t','dt','gnssFlag','gnss2Flag','gnssTMeas','gnssOosm','innovN','nis', ...
+              'gnssAccepted','oosmCount','baroH','baroFlag','zupt'};
+        for k = 1:numel(f1)
+            fn = f1{k};
+            if isfield(d, fn) && numel(d.(fn)) >= i
+                tmp = d.(fn);
+                sub.(fn) = tmp(1:i);
+            end
+        end
+    end
+
+    function autoSavePreset(obj)
+        % Auto-save the current config so a run can always be reproduced.
+        try
+            p = fullfile(fileparts(mfilename('fullpath')), 'presets');
+            if ~exist(p, 'dir'), mkdir(p); end
+            stamp = strrep(char(now('yyyymmdd_HHMMSS')), ' ', '_');
+            f = fullfile(p, ['auto_' stamp '.mat']);
+            save(f, 'cfg', '-v7');
+            obj.logMsg(['Auto-saved config preset: ' f]);
+        catch
+            % never block the user flow because of preset saving
+        end
     end
 
     function sub = subSlice(~, d, i)

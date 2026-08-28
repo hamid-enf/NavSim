@@ -21,6 +21,7 @@ properties
     cGnss = [0.90 0.40 0.10]
     cFus = [0.05 0.60 0.25]
     bgOverlays = {}
+    cfg = []                 % live config (for annotations)
 end
 
 methods
@@ -113,6 +114,11 @@ methods
         drawnow;
     end
 
+    function setCfg(obj, cfg)
+        % Called by the app whenever the live config changes.
+        obj.cfg = cfg;
+    end
+
     function [axs, lns] = seriesGrid(obj, parent, ylab, withGnss)
         n = numel(ylab);
         axs = gobjects(n,1); lns = cell(n,1);
@@ -181,7 +187,136 @@ methods
             obj.setXY(obj.lnSen{i},   t, rad2deg([d.gyroT(i,idx); d.gyroM(i,idx)]));
             obj.setXY(obj.lnSen{i+3}, t, [d.accT(i,idx); d.accM(i,idx)]);
         end
+        obj.drawAnnotations(d, idx, t);
     end
+
+    function drawAnnotations(obj, d, idx, t)
+        if isempty(obj.cfg) || d.n < 2, return; end
+        showAnn = isfield(obj.cfg.Plot, 'showGnssAnnotations') && ...
+            obj.cfg.Plot.showGnssAnnotations;
+        showSig = isfield(obj.cfg.Plot, 'showSigmaBands') && ...
+            obj.cfg.Plot.showSigmaBands;
+        % ---------------- dropout windows (time-series axes) -------------
+        windows = zeros(0,2);
+        if showAnn && isfield(obj.cfg.GNSS, 'useDropout') && obj.cfg.GNSS.useDropout
+            txt = char(obj.cfg.GNSS.dropoutText);
+            segs = strsplit(strtrim(txt), ';');
+            for k = 1:numel(segs)
+                v = sscanf(strtrim(segs{k}), '%f');
+                if numel(v) == 2 && v(2) >= v(1)
+                    windows(end+1, :) = v; %#ok<AGROW>
+                end
+            end
+        end
+        tmax = d.t(end);
+        axList = [obj.axPos(1), obj.axPos(2), obj.axPos(3), obj.axErr(1)];
+        for k = 1:4   % axPos(1..3), axErr(1)
+            ax = axList(k);
+            h = obj.ensureBand(ax);
+            yl = ylim(ax);
+            anyBand = false;
+            for wrow = 1:size(windows, 1)
+                a = windows(wrow,1); b = min(windows(wrow,2), tmax);
+                if b <= a, continue; end
+                set(h, 'XData', [a b b a], 'YData', [yl(1) yl(1) yl(2) yl(2)], ...
+                    'Visible', 'on');
+                anyBand = true;
+            end
+            if ~anyBand
+                set(h, 'Visible', 'off');
+            end
+        end
+        % ---------------- outlier epochs ---------------------------------
+        if showAnn && isfield(d, 'gnssFlag')
+            outIdx = find(d.gnssFlag == 2);
+            for k = 1:4
+                ax = axList(k);
+                h = obj.ensureOutliers(ax);
+                if isempty(outIdx)
+                    set(h, 'XData', nan, 'YData', nan);
+                elseif k <= 3
+                    set(h, 'XData', d.t(outIdx), 'YData', d.gnssP(k, outIdx));
+                else
+                    col = sqrt(sum((d.fusP(:,outIdx) - d.truthP(:,outIdx)).^2, 1));
+                    set(h, 'XData', d.t(outIdx), 'YData', col);
+                end
+            end
+            h = obj.ensureOutliers(obj.axMap);
+            if isempty(outIdx)
+                set(h, 'XData', nan, 'YData', nan);
+            else
+                set(h, 'XData', d.gnssP(2, outIdx), 'YData', d.gnssP(1, outIdx));
+            end
+        end
+        % ---------------- GNSS2 dots (dual source) -----------------------
+        if isfield(d, 'gnss2P')
+            g2 = find(~isnan(d.gnss2P(1,:)));
+            axList2 = [obj.axPos(1), obj.axPos(2), obj.axPos(3), obj.axMap];
+            for k = 1:4
+                ax = axList2(k);
+                h = obj.ensureGnss2(ax);
+                if isempty(g2)
+                    set(h, 'XData', nan, 'YData', nan);
+                elseif k <= 3
+                    set(h, 'XData', d.t(g2), 'YData', d.gnss2P(k, g2));
+                else
+                    set(h, 'XData', d.gnss2P(2, g2), 'YData', d.gnss2P(1, g2));
+                end
+            end
+        end
+        % ---------------- +/- sigma band around Fused --------------------
+        for k = 1:3
+            ax = obj.axPos(k);
+            h = obj.ensureSigma(ax);
+            if ~showSig || any(isnan(d.sigP(k, idx)))
+                set(h, 'XData', nan, 'YData', nan);
+                continue;
+            end
+            up = d.fusP(k, idx) + d.sigP(k, idx);
+            lo = d.fusP(k, idx) - d.sigP(k, idx);
+            set(h, 'XData', [t, flipt(t)], 'YData', [up, flipt(lo)]);
+        end
+    end
+
+    function h = ensureBand(~, ax)
+        h = findobj(ax, 'Tag', 'navsimDropoutBand');
+        if isempty(h)
+            h = fill(ax, nan, nan, 'Color', [0.30 0.32 0.38], 'FaceAlpha', 0.16, ...
+                'EdgeColor', 'none', 'HandleVisibility', 'off', ...
+                'Tag', 'navsimDropoutBand');
+        end
+        h = h(1);
+    end
+
+    function h = ensureOutliers(~, ax)
+        h = findobj(ax, 'Tag', 'navsimOutliers');
+        if isempty(h)
+            h = plot(ax, nan, nan, 'x', 'Color', [0.85 0.15 0.25], ...
+                'MarkerSize', 8, 'LineWidth', 1.6, 'HandleVisibility', 'off', ...
+                'Tag', 'navsimOutliers');
+        end
+        h = h(1);
+    end
+
+    function h = ensureGnss2(~, ax)
+        h = findobj(ax, 'Tag', 'navsimGnss2');
+        if isempty(h)
+            h = plot(ax, nan, nan, 'Marker', '.', 'MarkerSize', 7, ...
+                'Color', [0.75 0.25 0.85], 'LineStyle', 'none', ...
+                'HandleVisibility', 'off', 'Tag', 'navsimGnss2');
+        end
+        h = h(1);
+    end
+
+    function h = ensureSigma(~, ax)
+        h = findobj(ax, 'Tag', 'navsimSigmaBand');
+        if isempty(h)
+            h = fill(ax, nan, nan, 'Color', [0.05 0.60 0.25], 'FaceAlpha', 0.12, ...
+                'EdgeColor', 'none', 'HandleVisibility', 'off', ...
+                'Tag', 'navsimSigmaBand');
+        end
+        h = h(1);
+end
 
     function setXY(~, lns, X, Y)
         % X: 1xN or MxN matched with lines; Y likewise (MxN, one row per line)

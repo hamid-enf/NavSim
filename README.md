@@ -32,7 +32,10 @@ runAllTests
 | IMU | Bias/ARW/VRW/SF/Misalignment + بایاس Gauss–Markov، g-sensitivity، saturation و quantization — همه در Runtime |
 | GNSS | نرخ، نویز H/V، بایاس، سرعت، Dropout، Outlier (موقعیت و سرعت)، delay با epoch فیزیکی مستقل + خطای همبستهٔ Gauss–Markov (مانند multipath) |
 | INS | مکانیزاسیون Quaternion در دو حالت `flat` و **WGS84 local-level**؛ نرخ زمین/ترابرد، Coriolis، coning/sculling و **dt متغیر** |
-| Alignment | Levelling با شتاب‌سنج + قطب‌نما (stub)، خطای اولیه کاربر، نمایش همگرایی |
+| Alignment | Levelling با شتاب‌سنج + **مغناطیس‌نمای واقعی** (انحراب/بایاس/نویز) یا **gyrocompass** (نرخ زمین) یا stub افسانه‌ای؛ خطای اولیه کاربر؛ نمایش همگرایی |
+| Dual GNSS + Live DOP | رسیور دوم (وزن‌دهی منابع) و سیگما از هندسهٔ ۶ ماهواره‌ایِ متحرک (آزمایش‌های ۱۱/۱۲) |
+| Monte Carlo | Seed-sweep ۲۰ اجرا + CDF خطا (آزمایش‌های ۱۵/۱۶) |
+| UI extras | نشان «≠» برای پارامترهای تغییر‌یافته، preset ذخیره/بارگذاری + auto-save، scrubber زمانی، نوار ±σ و علامت قطعی/پرت روی نمودارها |
 | Fusion | ESKF حلقه‌بستهٔ ۱۵ حالته با دینامیک زمین، گسسته‌سازی مرتبهٔ بالاتر، Joseph/reset، NIS robust gating و fixed-lag OOSM |
 | Aiding | Baro (ارتفاع‌سنج بارومتریک با بایاس/نویز/GM) و ZUPT (به‌روزرسانی سرعت صفر در توقف) — همه در Runtime و بهینه برای سناریوهای تونل/بدون GNSS |
 | Error Injection | تب Errors: همه منابع خطا با یک کلیک فعال/غیرفعال |
@@ -42,7 +45,7 @@ runAllTests
 | Educational Mode | کلیک روی هر مرحله → توضیح کوتاه: چیست؟ ورودی/خروجی؟ معادله؟ خطاها؟ |
 | Experiments | ۱۰ آزمایش آماده با اجرای Headless و مقایسه‌ی آماری |
 | Logging | ذخیره MAT/CSV + Replay انیمیشنی |
-| Tests | ۱۴ تست MATLAB/Octave (`runAllTests`) + ۹ تست آینهٔ عددی Python |
+| Tests | ۱۵ تست MATLAB/Octave (`runAllTests`، شامل `test_golden_experiments`) + ۱۰ تست آینهٔ عددی Python |
 
 ## ساختار پوشه‌ها
 
@@ -70,7 +73,7 @@ NavSim/
 ## مدل‌ها و فرض‌های باقیمانده (شفاف‌سازی)
 
 - `INS.earthModel='flat'` مسیر آموزشی/سازگار قبلی را نگه می‌دارد. در حالت `wgs84`، مکانیزاسیون local-level بر پایهٔ ECEF/LLA دقیق، نرخ زمین و transport، Coriolis و گرانش عرض/ارتفاع اجرا می‌شود.
-- برای بازتولید رفتار legacy: `earthModel='flat'`، `useConingSculling=false`، `Fusion.robustMode='off'` و `Fusion.useOOSM=false` را انتخاب کنید.
+- برای بازتولید رفتار legacy: `earthModel='flat'`، `useConingSculling=false`، `Fusion.robustMode='off'`، `Fusion.useOOSM=false` و `Align.headingModel='magStub'` را انتخاب کنید.
 - ESKF همچنان فرم استاندارد **۱۵ حالتهٔ خطای کوچک** است؛ nominal state غیرخطی است ولی covariance ناگزیر پیرامون آن linearize می‌شود. lever-arm، GNSS clock/raw pseudorange، precession/nutation، tides و مدل gravity harmonics جزو دامنه نیستند.
 - trajectoryها در صفحهٔ مماس مرجع author می‌شوند و در حالت WGS84 به local-level جاری نگاشت می‌شوند؛ این ابزار شبیه‌ساز قاره‌پیما یا orbital navigator نیست.
 - OOSM فقط epochهایی را که داخل `Fusion.oosmLag` و دقیقاً روی یکی از epochهای ذخیره‌شدهٔ IMU باشند rewind/replay می‌کند؛ نمونهٔ قدیمی‌تر به‌طور صریح reject و log می‌شود.
@@ -99,9 +102,9 @@ python tools/check_ui_config.py
 python tools/run_mirror_tests.py
 ```
 
-آینهٔ فعلی ۸ گروه تست را پوشش می‌دهد: تبدیلات و heading مسیرها، Perfect match، drift
+آینهٔ فعلی ۱۰ گروه تست را پوشش می‌دهد: تبدیلات و heading مسیرها، Perfect match، drift
 ژیرو/شتاب‌سنج، همگرایی EKF، Alignment، `dt` متغیر، GNSS dropout، مقیاس Q/Bias-RW و
-رگرسیون‌های تراز زمانی، gravity، Descent و Turn. این دستورها exit-code مناسب CI دارند.
+رگرسیون‌های تراز زمانی، gravity، Descent، Turn و ویژگی‌های جدید (magnetometer/gyrocompass alignment، DOP زندهٔ هندسهٔ ماهواره، dual GNSS). این دستورها exit-code مناسب CI دارند.
 تست‌های MATLAB علاوه بر این موارد، زمان‌بندی Runtime GNSS، تغییر حالت Fusion،
 اعتبارسنجی Config، همهٔ ۹ مسیر و سازگاری Snapshot زنده را نیز بررسی می‌کنند.
 
