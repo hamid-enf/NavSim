@@ -34,8 +34,10 @@ assert(mPost < 6, ...
     sprintf('post-recovery: fused did not recover: %.1f m (doc ~1.9 m)', mPost));
 fprintf('  golden dropout: INS %.0f m, Fused %.1f m, post %.2f m\n', mIns, mFus, mPost);
 
-% --- experiment 2 reference: gyro-bias learning
-% --- (doc: calBg -> ~[0.51 -0.31 0.13] deg/s after ~120 s maneuver)
+% --- experiment 2 reference: gyro-bias learning.
+% --- Assert convergence to the TRUE injected bias (RNG-tolerant): MATLAB and
+% --- the Python mirror use different RNGs, so assert against the injected
+% --- value, not a specific run's numbers.
 cfg2 = defaultConfig();
 cfg2.Sim.seed = 1;
 cfg2.Sim.duration = 120;
@@ -50,9 +52,11 @@ eng2 = SimEngine(cfg2);
 eng2.runToEnd();
 res2 = eng2.results();
 calBg = rad2deg(res2.calBg(:, end));
-assert(max(abs(calBg - [0.51; -0.31; 0.13])) < 0.25, ...
-    sprintf('exp2: bias estimate drifted from documented reference: [%s]', ...
-    num2str(calBg, '%.3f')));
-fprintf('  golden exp2: calBg = [%.3f %.3f %.3f] deg/s (doc ~[0.51 -0.31 0.13])\n', ...
-    calBg);
+trueBias = [0.5; -0.3; 0.2];   % injected gyro bias (deg/s)
+bgErr = max(abs(calBg - trueBias));
+assert(bgErr < 0.25, ...
+    sprintf(['exp2: gyro bias did not converge to true [%.1f %.1f %.1f] ' ...
+    '(max err %.3f): got [%.3f %.3f %.3f]'], trueBias, bgErr, calBg));
+fprintf('  golden exp2: calBg = [%.3f %.3f %.3f] deg/s (true [%.1f %.1f %.1f], err %.3f)\n', ...
+    calBg, trueBias, bgErr);
 end
