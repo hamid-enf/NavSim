@@ -54,3 +54,5 @@ educational_video/
   fonts/            Vazirmatn + DejaVu
   render_all.py     رندر + میکس + چسباندن
 ```
+
+> **ویدیوی دوم (راهنمای عملی کار با برنامه در متلب):** پوشهٔ `../educational_video_howto/`
