@@ -9,6 +9,7 @@ properties
     traj
     imu
     gnss
+    gnss2              % second GNSS receiver (optional dual-source aiding)
     baro               % barometric altimeter model (optional aiding)
     ins
     insPure           % free-running INS, never corrected by the filter
@@ -24,6 +25,7 @@ properties
     refLla = zeros(3,1)
     lastGnssP = nan(3,1)
     lastGnssV = nan(3,1)
+    lastGnss2P = nan(3,1)
     gnssEvent = ''        % last GNSS epoch event: '', 'MEAS', 'MEAS_OUTLIER', 'DROPOUT'
     lastSnap = struct()
     stateHistory = {}       % fixed-lag prior/post states and IMU intervals for OOSM
@@ -54,6 +56,7 @@ methods
         newTraj = TrajectoryLibrary.make(cfg.Traj.type, trajCfg);
         newImu = IMUModel();   newImu.updateParams(cfg);
         newGnss = GNSSModel(); newGnss.updateParams(cfg);
+        newGnss2 = GNSSModel('GNSS2'); newGnss2.updateParams(cfg);
         newBaro = BaroModel(); newBaro.updateParams(cfg);
         newIns = INSMechanization();
         newInsPure = INSMechanization();
@@ -71,6 +74,7 @@ methods
         obj.traj = newTraj;
         obj.imu = newImu;
         obj.gnss = newGnss;
+        obj.gnss2 = newGnss2;
         obj.baro = newBaro;
         obj.ins = newIns;
         obj.insPure = newInsPure;
@@ -103,6 +107,7 @@ methods
         % in the UI candidate.
         runtimeCfg = validateConfig(runtimeCfg);
         obj.gnss.updateParams(runtimeCfg, obj.t); % validate windows before mutation
+        obj.gnss2.updateParams(runtimeCfg, obj.t);
         obj.imu.updateParams(runtimeCfg);
         obj.baro.updateParams(runtimeCfg);
         obj.cfg = runtimeCfg;
@@ -131,12 +136,14 @@ methods
         rng(obj.cfg.Sim.seed, 'twister');
         obj.imu.reset();
         obj.gnss.reset();
+        obj.gnss2.reset();
         obj.baro.reset();
         obj.t = 0; obj.k = 0; obj.istep = 0;
         obj.done = false;
         obj.calibBg = zeros(3,1);  obj.calibBa = zeros(3,1);
         obj.zuptRun = 0; obj.zuptCount = 0;
         obj.lastGnssP = nan(3,1);  obj.lastGnssV = nan(3,1);
+        obj.lastGnss2P = nan(3,1);
         obj.gnssEvent = '';
         obj.lastSnap = struct();
         obj.stateHistory = {};
@@ -226,6 +233,8 @@ methods
             obj.lastGnssP = z.p;
             if z.hasVel, obj.lastGnssV = z.v; end
         end
+        [hasG2, z2, ~] = obj.gnss2.update(obj.t, truth);
+        if hasG2, obj.lastGnss2P = z2.p; end
 
         % ---------- Baro runs every step (may produce a measurement) ---
         [hasB, zb] = obj.baro.update(obj.t, truth.lla(3));
@@ -237,7 +246,7 @@ methods
                 (obj.t - obj.align.t0) >= c.Align.duration - 1e-10*max(1, c.Align.duration)
             % Refresh transfer/static alignment at this boundary sample so
             % finalize() represents the same truth epoch used by initNav.
-            obj.align.update(fm, truth);
+            obj.align.update(fm, truth, dt);
             obj.phase = 'nav';
             obj.initNav(truth);
         end
@@ -253,13 +262,16 @@ methods
             sRow.gnssOosm = double(z.tMeas < obj.t-1e-10);
             if z.hasVel, sRow.gnssV = z.v; end
         end
+        if hasG2
+            sRow.gnss2P = z2.p; sRow.gnss2Flag = 1;
+        end
         if hasB   % log baro measurement in every phase
             sRow.baroH = zb.h;
         end
 
         if strcmp(obj.phase, 'align')
             % ---------- Stage: Alignment ----------
-            obj.align.update(fm, truth);
+            obj.align.update(fm, truth, dt);
             sRow.alignEst = obj.align.estEul;
         else
             % ---------- Stage 7+8: robust current/OOSM GNSS update ------
@@ -288,6 +300,21 @@ methods
                 end
             else
                 obj.updateLatestHistoryPost();
+            end
+
+            % ---------- Second GNSS receiver (dual-source aiding) ----
+            % Arrival-time update (no OOSM history for GNSS2 by design):
+            % the filter weights the two sources through their R matrices.
+            if hasG2 && obj.isFusionOn()
+                if ~obj.ekf.initialized, obj.ekf.initState(c); end
+                obj.ekf.updatePos(z2.p - obj.ins.p, z2.R);
+                if z2.hasVel && c.Fusion.useVel
+                    obj.ekf.updateVel(z2.v - obj.ins.v, z2.Rv);
+                end
+                dx2 = obj.ekf.consumeDx();
+                obj.ins.correctState(dx2(1:3), dx2(4:6), dx2(7:9));
+                obj.calibBg = obj.calibBg + dx2(10:12);
+                obj.calBa = obj.calBa + dx2(13:15);
             end
 
             % ---------- Current-epoch ZUPT and barometric aiding ------
@@ -593,6 +620,7 @@ methods (Access = private)
         end
         sRow.calBg = obj.calibBg; sRow.calBa = obj.calibBa;
         sRow.gnssP = nan(3,1); sRow.gnssV = nan(3,1); sRow.gnssFlag = nan;
+        sRow.gnss2P = nan(3,1); sRow.gnss2Flag = nan;
         sRow.gnssTMeas = nan; sRow.gnssOosm = nan;
         sRow.baroH = nan; sRow.baroFlag = nan; sRow.zupt = 0;
         sRow.sigP = nan(3,1); sRow.sigV = nan(3,1); sRow.sigA = nan(3,1);
@@ -618,7 +646,10 @@ methods (Access = private)
             'eul', sRow.insE, 'lla', ned2lla(sRow.insP, obj.refLla));
         snap.gnss = struct('has', hasG, 'p', obj.lastGnssP, 'v', obj.lastGnssV, ...
             'event', obj.gnssEvent, 'enabled', obj.cfg.GNSS.enabled, ...
-            'tMeas',sRow.gnssTMeas,'oosm',sRow.gnssOosm);
+            'tMeas',sRow.gnssTMeas,'oosm',sRow.gnssOosm, ...
+            'hdop', obj.gnss.lastHDOP, 'vdop', obj.gnss.lastVDOP);
+        snap.gnss2 = struct('has', hasG2, 'p', obj.lastGnss2P, ...
+                            'enabled', obj.cfg.GNSS2.enabled);
         snap.baro = struct('has', hasB, 'h', sRow.baroH, ...
             'flag', sRow.baroFlag, 'enabled', obj.cfg.Baro.enabled);
         snap.zupt = struct('run', obj.zuptRun, 'count', obj.zuptCount, ...

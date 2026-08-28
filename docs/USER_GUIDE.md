@@ -34,17 +34,21 @@ main          % باز شدن GUI
 - **IMU**: Bias/Noise/SF/Misalignment و driving noise بایاس؛ انتخاب Random Walk یا Gauss–Markov، correlation time، gyro g-sensitivity، saturation و quantization.
   سوئیچ اصلی Bias، مؤلفهٔ ثابت و مؤلفهٔ stochastic همان سنسور را با هم فعال/غیرفعال می‌کند.
 - **GNSS**: نرخ، نویز، بایاس، سرعت، Dropout (`dropoutText` مثل `'30 60; 90 100'`)، Outlier و Delay. هر نمونه `tMeas` فیزیکی و `tEmit` تحویل مستقل دارد.
+- **هندسهٔ ماهواره** (تب GNSS، `useSatGeometry`): سیگماهای هر epoch از DOP یک آسمان ۶ ماهواره‌ایِ متحرک حساب می‌شود (σH = sig0·HDOP)؛ HDOP/VDOP زنده در Data Flow دیده می‌شود — «چرا عمودی بدتر است» تبدیل به مشاهده می‌شود.
+- **GNSS 2**: رسیور دوم برای سناریوی dual-source — فیلتر هر دو منبع را از طریق R وزن می‌کند (آزمایش ۱۱).
   نرخ GNSS نباید از کمترین نرخ polling شبیه‌سازی (با درنظرگرفتن variable dt) بیشتر باشد.
   **خطای همبستهٔ GM** (`useGmNoise`): خطای Gauss–Markov با σ=gmSigma و τ=gmTau به اندازه‌گیری اضافه می‌شود (مدل سادهٔ multipath).
   این خطا در R منعکس *نمی‌شود*؛ فیلترِ بدون robust mode دچار بیش‌اطمینانی می‌شود — `robustMode=adaptive|reject` را مقایسه کنید.
   **Outlier سرعت**: با `outlierVelSigma>0`، دور زدن epoch کامل (موقعیت *و* سرعت) خراب می‌شود.
 - **Baro** (تب جدید): ارتفاع‌سنج بارومتریک با نرخ/نویز/بایاس ثابت و درِف Gauss–Markov.
   آپدیت اسکالر ارتفاع با گیت NIS مستقل (1 درجه آزادی). برای سناریوهای بدون GNSS (تونل/اتاق پرواز) عمود کانال را کران‌دار می‌کند.
-- **INS & Align**: خطای اولیه، مرجع ژئودتیک، `flat|wgs84`، Earth/transport/Coriolis، coning/sculling و Alignment.
+- **INS & Align**: خطای اولیه، مرجع ژئودتیک، `flat|wgs84`، Earth/transport/Coriolis، coning/sculling و Alignment — به‌علاوه **مدل heading**: `magnetometer` (پیش‌فرض؛ میدان ژئومغناطیسی واقعی با انحراب/بایاس/نویز، دقت ~۱°)، `gyrocompass` (همگرایی با نرخ زمین، tau مؤثر شتاب‌دهیده) و `magStub` (وراثتی: yaw واقعی + نویز).
 - **Fusion**: حالت `ins|loose`، چگالی‌های نویز، `P0` و Q/R؛ robust NIS mode/gates، adaptive-R cap و fixed-lag OOSM/window.
   **ZUPT**: پس از `zuptHoldS` ثانیه سکونِ آشکارشده (`|‖f‖−g| < zuptAccelG` و `‖w‖ < zuptRateDps`)، شبه‌مشاهدهٔ v=0 با σ=zuptSigma هر گام تزریق می‌شود.
   برای خودرو (توقف پشت چراغ) و پیاده‌روی (PDR) خطای INS را عملاً صفر نگه می‌دارد؛ ستون `zupt` در LOG (1=اعمال، 2=رد گیت).
 - **Errors**: همه‌ی سوئیچ‌های خطا در یک صفحه (برای دمو سریع).
+- **Plot**: نوار ±σ حول ردّ Fused و علامت‌گذاری پنجره‌های قطعی/پرت‌ها روی نمودارها (هر دو پیش‌فرض روشن).
+- هر پارامتری که از پیش‌فرض عوض شود، در لیبلش با علامت «≠» نارنجی مشخص می‌شود — تا فراموش نکنید چه چیزی را عوض کرده‌اید.
 
 ## 4. نمایش‌ها
 
@@ -65,7 +69,7 @@ main          % باز شدن GUI
 
 ## 6. Logging و Replay
 
-- تب Logs → **Save MAT / Save CSV**.
+- تب Logs → **Save MAT / Save CSV**، **Save/Load config preset** (بازتولید دقیق همان اجرا) — و با هر Stop، کانفیگ به‌صورت خودکار در `presets/auto_*.mat` ذخیره می‌شود. بعد از Load، **اسلایدر Scrub** نمودارها را در طول لاگ جابه‌جا می‌کند.
 - **Load MAT & view**: بارگذاری لاگ قبلی و نمایش روی نمودارها + **Replay animation**
   (حرکت وسیله در 3D View با سرعت قابل تنظیم).
 

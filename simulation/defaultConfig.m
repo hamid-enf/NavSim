@@ -72,7 +72,27 @@ cfg.GNSS.delay        = 0;         % measurement delay [s]
 cfg.GNSS.useGmNoise   = false;     % Gauss-Markov correlated (multipath-like) error
 cfg.GNSS.gmSigma      = 2;         % GM steady-state 1-sigma per axis [m]
 cfg.GNSS.gmTau        = 30;        % GM correlation time [s]
+% Satellite geometry -> time-varying DOP (off by default; keeps legacy noise)
+cfg.GNSS.useSatGeometry = false;   % compute sigmaH/V from live HDOP/VDOP
+cfg.GNSS.satCount       = 6;       % constellation size
+cfg.GNSS.sig0           = 1.0;     % base code noise [m]; sigmaH = sig0*HDOP
+cfg.GNSS.satPeriod      = 45;      % representative sky-rotation period [s] (accelerated)
 
+% ---------------- Second GNSS receiver (dual-source aiding) ----------------
+cfg.GNSS2.enabled     = false;    % feed a second receiver into the fusion
+cfg.GNSS2.rate        = 1;        % update rate [Hz]
+cfg.GNSS2.useNoise    = true;
+cfg.GNSS2.posSigmaH   = 4.0;      % worse receiver on purpose (weighting demo)
+cfg.GNSS2.posSigmaV   = 8.0;
+cfg.GNSS2.enableVel   = false;
+cfg.GNSS2.velSigma    = 0.1;
+cfg.GNSS2.biasNed     = [0 0 0];
+cfg.GNSS2.delay       = 0.5;      % typical network/delayed second receiver
+%
+% ---------------- Plot annotations ----------------
+cfg.Plot.showSigmaBands      = true; % +/- sigma band around Fused position
+cfg.Plot.showGnssAnnotations = true; % dropout windows + outlier markers
+%
 % ---------------- Barometric altimeter (altitude aiding) ----------------
 cfg.Baro.enabled = false;   % feed altitude measurements into the fusion filter
 cfg.Baro.rate    = 10;      % measurement rate [Hz]
@@ -98,7 +118,14 @@ cfg.INS.useConingSculling = false;% off by default for flat-mode compatibility; 
 cfg.Align.enabled         = true;  % run an alignment phase before nav
 cfg.Align.duration        = 10;    % alignment time [s]
 cfg.Align.coarseLevel     = true;  % accelerometer levelling (roll/pitch)
-cfg.Align.magHeadingSigmaDeg = 1;  % magnetometer-based yaw accuracy [deg]
+cfg.Align.headingModel    = 'magnetometer'; % 'magnetometer' | 'gyrocompass' | 'magStub' (legacy)
+cfg.Align.magDeclinationDeg = 5;   % magnetic declination at reference [deg]
+cfg.Align.magFieldT       = 50e-6; % geomagnetic field strength F [T]
+cfg.Align.magInclinationDeg = 60;  % magnetic inclination (dip) [deg]
+cfg.Align.magNoiseT       = 4e-7;  % magnetometer noise 1-sigma [T] (~1 deg yaw)
+cfg.Align.magBiasT        = 0;     % hard-iron bias magnitude [T]
+cfg.Align.gyrocompassTau  = 15;    % gyrocompass effective tau [s] (accelerated; ~4.4e4 for real)
+cfg.Align.magHeadingSigmaDeg = 1;  % magStub (legacy) yaw accuracy [deg]
 cfg.Align.coarseMovingSigmaDeg = 3; % transfer-alignment coarse error [deg] (moving start)
 cfg.Align.applyUserErr    = false; % add extra user-set initial error
 cfg.Align.userErrDeg      = [0 0 5]; % extra initial [roll pitch yaw] error [deg]

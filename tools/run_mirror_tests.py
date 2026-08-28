@@ -290,6 +290,78 @@ def t_aiding():
     assert fusDown<8, f"baro failed to bound vertical error: {fusDown:.2f}"
     print(f"      aiding: GM std={std.mean():.2f}m rho1={rho:.3f}; ZUPT pos {fusMax:.2f}m (INS {insMax:.0f}m, n={e4.zuptCount}); baro down {fusDown:.2f}m (INS {insDown:.0f}m)")
 
+def t_new_features():
+    # ---------- Real magnetometer alignment (static platform) ----------
+    cfg = default_config()
+    cfg['Traj'].update(type='Straight', speed=0.0)
+    cfg['Sim']['duration'] = 40.0
+    cfg['Align'].update(enabled=True, duration=35.0, headingModel='magnetometer',
+                        applyUserErr=False)
+    cfg['IMU']['useGyroBias'] = False
+    cfg['IMU']['useAccelBias'] = False
+    e = Engine(cfg)
+    while e.t < cfg['Align']['duration']:
+        e.step()
+    r = e.results()
+    am = ~np.isnan(r['alignEst'][0])
+    idx = np.where(am)[0]
+    assert len(idx) > 100, "no alignment estimates"
+    early = idx[int(0.2*len(idx))]
+    late = idx[-1]
+    yawEarly = abs(np.degrees(wrapPi(r['alignEst'][2,early] - r['truthE'][2,early])))
+    yawLate  = abs(np.degrees(wrapPi(r['alignEst'][2,late] - r['truthE'][2,late])))
+    assert yawLate < 0.5, f"magnetometer yaw late error too large: {yawLate:.3f} deg"
+    rollLate = float(np.linalg.norm(r['alignEst'][0:2,late] - r['truthE'][0:2,late]))
+    assert np.degrees(rollLate) < 0.5, f"levelling degraded: {np.degrees(rollLate):.3f} deg"
+    # ---------- Gyrocompass (earth-rate, accelerated) alignment ----------
+    cfg2 = default_config()
+    cfg2['Traj'].update(type='Straight', speed=0.0)
+    cfg2['Sim']['duration'] = 60.0
+    cfg2['Align'].update(enabled=True, duration=55.0, headingModel='gyrocompass',
+                         gyrocompassTau=15.0, applyUserErr=False)
+    cfg2['IMU']['useGyroBias'] = False
+    cfg2['IMU']['useAccelBias'] = False
+    e2 = Engine(cfg2)
+    while e2.t < cfg2['Align']['duration']:
+        e2.step()
+    r2 = e2.results()
+    am2 = ~np.isnan(r2['alignEst'][0])
+    idx2 = np.where(am2)[0]
+    yawFirst = abs(np.degrees(wrapPi(r2['alignEst'][2,idx2[50]] - r2['truthE'][2,idx2[50]])))
+    yawLate2 = abs(np.degrees(wrapPi(r2['alignEst'][2,idx2[-1]] - r2['truthE'][2,idx2[-1]])))
+    assert yawFirst > 7.0, f"gyrocompass did not start offset: {yawFirst:.2f} deg"
+    assert yawLate2 < 1.0, f"gyrocompass yaw late error too large: {yawLate2:.3f} deg"
+    # ---------- Live DOP from satellite geometry ----------
+    cfg3 = default_config()
+    cfg3['GNSS']['useSatGeometry'] = True
+    g = GNSS(cfg3)
+    G = cfg3['GNSS']
+    hops = []; vops = []
+    for i in range(40):
+        sH, sV = g.epochSigmas(G)
+        hops.append(sH); vops.append(sV)
+    assert all(h > 0.3 and h < 6 for h in hops), f"HDOP out of range: {hops}"
+    assert all(v > 0.8 for v in vops), f"VDOP out of range: {vops}"
+    assert max(vops) > min(vops) * 1.03, "VDOP did not vary with geometry"
+    # ---------- Dual GNSS: better source improves the fused solution ----------
+    cA = default_config()
+    cA['Sim']['duration'] = 60.0
+    cA['GNSS']['enabled'] = False
+    cA['GNSS2'].update(enabled=True)
+    eA = Engine(cA); eA.run(); rA = eA.results()
+    cB = copy.deepcopy(cA)
+    cB['GNSS']['enabled'] = True
+    eB = Engine(cB); eB.run(); rB = eB.results()
+    mA = ExperimentPresets_metrics(rA); mB = ExperimentPresets_metrics(rB)
+    assert mB < 0.85 * mA, (f"dual GNSS not better: A={mA:.2f} m, B={mB:.2f} m")
+    print(f"      features: mag yaw {yawEarly:.2f}->{yawLate:.3f} deg; "
+          f"gyrocompass {yawFirst:.1f}->{yawLate2:.3f} deg; "
+          f"VDOP range {min(vops):.2f}-{max(vops):.2f}; "
+          f"dual GNSS {mA:.2f}->{mB:.2f} m")
+
+def ExperimentPresets_metrics(r):
+    return float(np.sqrt(np.nanmean(r['errPosFus']**2)))
+
 print("="*60)
 check('test_utils', t_utils)
 check('test_perfect_match', t_perfect)
@@ -300,6 +372,7 @@ check('test_variable_dt', t_vdt)
 check('test_gnss_dropout', t_dropout)
 check('test_time_alignment', t_time_alignment)
 check('test_aiding', t_aiding)
+check('test_new_features', t_new_features)
 print("="*60)
 passed=[r for r in results if r[1]]
 print(f"Result: {len(passed)}/{len(results)} passed")

@@ -86,6 +86,23 @@ spec = {
 'GNSS','GM sigma [m]','GNSS.gmSigma','num',[0 100 0.1];
 'GNSS','GM correlation tau [s]','GNSS.gmTau','num',[1 10000 1];
 'GNSS','Outlier velocity sigma [m/s]','GNSS.outlierVelSigma','num',[0 50 0.1];
+% ---------------- GNSS satellite geometry (live DOP) ----------------
+'GNSS','Satellite geometry (live DOP)','GNSS.useSatGeometry','check','';
+'GNSS','Satellite count','GNSS.satCount','num',[4 24 1];
+'GNSS','Base code noise sig0 [m]','GNSS.sig0','num',[0.1 20 0.1];
+'GNSS','Sky-rotation period [s]','GNSS.satPeriod','num',[5 600 5];
+% ---------------- GNSS2 (dual source) ----------------
+'GNSS2','Second receiver enabled','GNSS2.enabled','check','';
+'GNSS2','Update rate [Hz]','GNSS2.rate','num',[0.1 50 0.1];
+'GNSS2','Enable noise','GNSS2.useNoise','check','';
+'GNSS2','Pos sigma horizontal [m]','GNSS2.posSigmaH','num',[0 100 0.1];
+'GNSS2','Pos sigma vertical [m]','GNSS2.posSigmaV','num',[0 200 0.1];
+'GNSS2','Enable velocity output','GNSS2.enableVel','check','';
+'GNSS2','Vel sigma [m/s]','GNSS2.velSigma','num',[0 5 0.01];
+'GNSS2','Bias N [m]','GNSS2.biasNed(1)','num',[-200 200 0.5];
+'GNSS2','Bias E [m]','GNSS2.biasNed(2)','num',[-200 200 0.5];
+'GNSS2','Bias D [m]','GNSS2.biasNed(3)','num',[-200 200 0.5];
+'GNSS2','Measurement delay [s]','GNSS2.delay','num',[0 10 0.1];
 % ---------------- Baro ----------------
 'Baro','Baro aiding enabled','Baro.enabled','check','';
 'Baro','Rate [Hz]','Baro.rate','num',[0.1 100 1];
@@ -118,6 +135,13 @@ spec = {
 'INS & Align','Init err roll [deg]','Align.userErrDeg(1)','num',[-45 45 0.1];
 'INS & Align','Init err pitch [deg]','Align.userErrDeg(2)','num',[-45 45 0.1];
 'INS & Align','Init err yaw [deg]','Align.userErrDeg(3)','num',[-180 180 0.1];
+'INS & Align','Heading model','Align.headingModel','drop',{'magnetometer','gyrocompass','magStub'};
+'INS & Align','Mag declination [deg]','Align.magDeclinationDeg','num',[-180 180 0.5];
+'INS & Align','Mag field strength [T]','Align.magFieldT','num',[1e-5 1e-4 1e-6];
+'INS & Align','Mag inclination [deg]','Align.magInclinationDeg','num',[-89 89 1];
+'INS & Align','Mag noise 1-sigma [T]','Align.magNoiseT','num',[0 1e-5 1e-7];
+'INS & Align','Mag hard-iron bias [T]','Align.magBiasT','num',[0 1e-5 1e-7];
+'INS & Align','Gyrocompass tau [s]','Align.gyrocompassTau','num',[1 1e5 1];
 % ---------------- Fusion ----------------
 'Fusion','Mode (ins | loose)','Fusion.mode','drop',{'ins','loose'};
 'Fusion','Use GNSS velocity updates','Fusion.useVel','check','';
@@ -158,5 +182,8 @@ spec = {
 'Errors','GNSS dropout','GNSS.useDropout','check','';
 'Errors','Initial alignment error','Align.applyUserErr','check','';
 'Errors','Timing error (variable dt mode)','Sim.variableDt','drop',{'off','jitter','tworate'};
+% ---------------- Plot annotations ----------------
+'Plot','Sigma band around Fused','Plot.showSigmaBands','check','';
+'Plot','GNSS dropout/outlier marks','Plot.showGnssAnnotations','check','';
 };
 end

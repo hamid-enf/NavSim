@@ -192,17 +192,19 @@ class IMU:
         return s.Mg@wT+bg+ng, s.Ma@fT+ba+na, dict(bg=bg,ba=ba)
 
 class GNSS:
-    def __init__(s,c):
-        s.c=c; s.nextEpoch=0.0; s.queue=[]; s.last=None
+    def __init__(s,c,section='GNSS'):
+        s.c=c; s.section=section; s.nextEpoch=0.0; s.queue=[]; s.last=None
         s.gmState=np.zeros(3); s.gmInit=False; s.lastGmT=0.0
-        G=c['GNSS']
+        s.satPhase=np.zeros(0); s.satEl=np.zeros(0)
+        s.lastHDOP=float('nan'); s.lastVDOP=float('nan')
+        G=c[section]
         s.windows=[]
         for seg in str(G['dropoutText']).split(';'):
             vals=[float(x) for x in seg.split()]
             if len(vals)>=2: s.windows.append((vals[0],vals[1]))
         s.rng=np.random.default_rng(c['Sim']['seed']+7)
     def inDropout(s,t):
-        G=s.c['GNSS']
+        G=s.c[s.section]
         if not G['useDropout']: return False
         for a,b in s.windows:
             if a<=t<=b: return True
@@ -219,8 +221,31 @@ class GNSS:
             s.gmState=phi*s.gmState+sig*s.rng.standard_normal(3)
         s.lastGmT=t
         return s.gmState.copy()
+    def epochSigmas(s, G):
+        sH = G['posSigmaH'] * (1 if G['useNoise'] else 0)
+        sV = G['posSigmaV'] * (1 if G['useNoise'] else 0)
+        if G.get('useSatGeometry', False) and G['useNoise']:
+            nSat = int(G['satCount'])
+            idx = np.arange(nSat)
+            if len(s.satPhase) != nSat:
+                s.satPhase = (2*np.pi/nSat) * idx + (np.mod(3*idx + 1, 7) - 3) * 0.15
+                s.satOmega = (2*np.pi / G['satPeriod']) * (1 + 0.25*np.mod(idx + 2, 6)/5)
+                elSet = np.array([15, 60, 25, 70, 18, 50], dtype=float)
+                s.satEl = np.deg2rad(elSet[np.mod(idx, 6)])
+            s.satPhase = np.mod(s.satPhase + s.satOmega / G['rate'], 2*np.pi)
+            A = np.zeros((nSat, 4))
+            for i in range(nSat):
+                az = s.satPhase[i]; el = s.satEl[i]
+                A[i] = [1, np.cos(el)*np.cos(az), np.cos(el)*np.sin(az), -np.sin(el)]
+            Ginv = np.linalg.inv(A.T @ A)
+            s.lastHDOP = float(np.sqrt(max(Ginv[1,1] + Ginv[2,2], 0.0)))
+            s.lastVDOP = float(np.sqrt(max(Ginv[3,3], 0.0)))
+            sH = G['sig0'] * s.lastHDOP
+            sV = G['sig0'] * s.lastVDOP
+        return sH, sV
+
     def update(s,t,truth):
-        G=s.c['GNSS']
+        G=s.c[s.section]
         hasG=False; z=None; evt=''
         if not G['enabled']: return False,None,''
         if t >= s.nextEpoch - 1e-12:
@@ -228,8 +253,7 @@ class GNSS:
             if s.inDropout(t):
                 evt='DROPOUT'
             else:
-                sH=G['posSigmaH']*(1 if G['useNoise'] else 0)
-                sV=G['posSigmaV']*(1 if G['useNoise'] else 0)
+                sH,sV = s.epochSigmas(G)
                 p=truth['p']+np.array(G['biasNed'])+np.array([sH*s.rng.standard_normal(),sH*s.rng.standard_normal(),sV*s.rng.standard_normal()])
                 if G.get('useGmNoise',False):
                     p = p + s.advanceGm(t)
@@ -310,16 +334,44 @@ class Align:
                     float(np.linalg.norm(truth0['eulDot']))<=np.radians(0.1))
         s.estEul=truth0['eul']+np.array([0.5,0.5,1.0])
         s.active=A['enabled'] and A['duration']>0
-    def update(s,fm,truth):
+        s.rng=rng
+        # ---------------- heading model setup ----------------
+        s.headingModel=A.get('headingModel','magStub')
+        F=A['magFieldT']; inc=np.radians(A['magInclinationDeg']); dec=np.radians(A['magDeclinationDeg'])
+        Fh=F*np.cos(inc)
+        s.Bn=np.array([Fh*np.cos(dec), Fh*np.sin(dec), F*np.sin(inc)])
+        s.magBias=np.array([A['magBiasT'],0.0,0.0]); s.magNoiseT=A['magNoiseT']
+        s.magSum=1+0j; s.nMag=0
+        s.yawEst=truth0['eul'][2]+np.radians(15)
+        s.dec=dec; s.gyrocompassTau=max(A['gyrocompassTau'],1e-3)
+    def magHeading(s,fm,truth,phi,theta):
+        eul=truth['eul']
+        Cn2b=eul2dcm(eul)
+        Bb=Cn2b@s.Bn+s.magBias+s.magNoiseT*s.rng.standard_normal(3)
+        Rx=np.array([[1,0,0],[0,np.cos(phi),np.sin(phi)],[0,-np.sin(phi),np.cos(phi)]])
+        Ry=np.array([[np.cos(theta),0,-np.sin(theta)],[0,1,0],[np.sin(theta),0,np.cos(theta)]])
+        Bl=Ry@Rx@Bb
+        psi=wrapPi(s.dec-np.arctan2(Bl[1],Bl[0]))
+        s.magSum += np.exp(1j*psi)
+        s.nMag += 1
+        return wrapPi(np.angle(s.magSum))
+    def update(s,fm,truth,dt):
         if not s.active: return
         s.n+=1
         if s.isStatic:
             s.sumF+=fm; mf=s.sumF/s.n
             if s.c['Align']['coarseLevel']:
                 phi=np.arctan2(-mf[1],-mf[2]); th=np.arctan2(mf[0],np.hypot(mf[1],mf[2]))
-                s.estEul=np.array([phi,th,s.truthEul0[2]+s.yawMagErr])
             else:
-                s.estEul=s.truthEul0+np.array([0,0,s.yawMagErr])
+                phi=s.estEul[0]; th=s.estEul[1]
+            if s.headingModel=='magnetometer':
+                yaw=s.magHeading(fm,truth,phi,th)
+            elif s.headingModel=='gyrocompass':
+                yaw=s.yawEst+wrapPi(truth['eul'][2]-s.yawEst)*(1-np.exp(-dt/s.gyrocompassTau))
+            else:   # magStub (legacy)
+                yaw=s.truthEul0[2]+s.yawMagErr
+            s.yawEst=yaw
+            s.estEul=np.array([phi,th,yaw])
         else:
             s.estEul=truth['eul']+s.coarseErr
     def finalize(s):
@@ -388,11 +440,20 @@ def default_config():
       GNSS=dict(enabled=True,rate=1.0,useNoise=True,posSigmaH=1.5,posSigmaV=3.0,enableVel=False,
                 velSigma=0.05,biasNed=[0,0,0],useDropout=False,dropoutText='60 75',randDropProb=0.0,
                 useOutlier=False,outlierProb=0.02,outlierMag=50,delay=0.0,
+                useGmNoise=False,gmSigma=2.0,gmTau=30.0,outlierVelSigma=0.0,
+                useSatGeometry=False,satCount=6,sig0=1.0,satPeriod=45),
+      GNSS2=dict(enabled=False,rate=1.0,useNoise=True,posSigmaH=4.0,posSigmaV=8.0,
+                enableVel=False,velSigma=0.1,biasNed=[0,0,0],delay=0.5,
+                useDropout=False,dropoutText='',randDropProb=0.0,
+                useOutlier=False,outlierProb=0.02,outlierMag=50,
                 useGmNoise=False,gmSigma=2.0,gmTau=30.0,outlierVelSigma=0.0),
+      Plot=dict(showSigmaBands=True,showGnssAnnotations=True),
       Baro=dict(enabled=False,rate=10.0,sigma=1.0,bias=0.0,gmSigma=0.0,gmTau=60.0),
       INS=dict(gravity=9.80665,initPosErr=[0,0,0],initVelErr=[0,0,0],refLat=50.478,refLon=12.365,refH=430),
       Align=dict(enabled=True,duration=10.0,coarseLevel=True,magHeadingSigmaDeg=1.0,
-                 coarseMovingSigmaDeg=3.0,applyUserErr=False,userErrDeg=[0,0,5]),
+                 coarseMovingSigmaDeg=3.0,applyUserErr=False,userErrDeg=[0,0,5],
+                 headingModel='magnetometer',magDeclinationDeg=5.0,magFieldT=50e-6,
+                 magInclinationDeg=60.0,magNoiseT=4e-7,magBiasT=0.0,gyrocompassTau=15.0),
       Fusion=dict(mode='loose',useVel=False,qa=0.05,qg=0.02,qbg=0.002,qba=0.005,
                   p0pos=5.0,p0vel=0.5,p0attDeg=5.0,p0gyroBiasDps=0.5,p0accelBias=0.3,
                   qScale=1.0,rScale=1.0,nisGateBaro=10.83,
@@ -405,7 +466,8 @@ class Engine:
         s.c=cfg
         P=dict(cfg['Traj']); P['durationVal']=cfg['Sim']['duration']
         s.traj=make_traj(P['type'],P)
-        s.imu=IMU(cfg); s.gnss=GNSS(cfg); s.baro=Baro(cfg); s.ins=INS(); s.insPure=INS(); s.ekf=EKF()
+        s.imu=IMU(cfg); s.gnss=GNSS(cfg); s.gnss2=GNSS(cfg,'GNSS2'); s.baro=Baro(cfg)
+        s.ins=INS(); s.insPure=INS(); s.ekf=EKF()
         s.zuptRun=0.0; s.zuptCount=0
         s.rs=np.random.default_rng(cfg['Sim']['seed'])
         s.t=0.0; s.k=0; s.istep=0; s.done=False
@@ -450,11 +512,12 @@ class Engine:
         if hasG:
             s.lastGnssP=z['p']
             if z['hasVel']: s.lastGnssV=z['v']
+        hasG2,z2,evt2=s.gnss2.update(s.t,truth)
         hasB,zb=s.baro.update(s.t, s.c['INS']['refH']-truth['p'][2])
 
         if (s.phase=='align' and
                 (s.t-s.align.t0)>=c['Align']['duration']-1e-10*max(1.0,c['Align']['duration'])):
-            s.align.update(fm,truth)
+            s.align.update(fm,truth,dt)
             s.phase='nav'; s.initNav(truth)
 
         row=dict(t=s.t,dt=dt,truthP=truth['p'].copy(),truthV=truth['v'].copy(),truthE=truth['eul'].copy(),
@@ -471,7 +534,7 @@ class Engine:
         if hasG:
             row['gnssP']=z['p']; row['gnssFlag']=1+(1 if z['outlier'] else 0)
         if s.phase=='align':
-            s.align.update(fm,truth)
+            s.align.update(fm,truth,dt)
             row['alignEst']=s.align.estEul.copy()
         else:
             if hasG and s.fusionOn():
@@ -482,6 +545,14 @@ class Engine:
                 dx=s.ekf.consume()
                 s.ins.correct(dx[0:3],dx[3:6],dx[6:9])
                 s.calBg=s.calBg+dx[9:12]; s.calBa=s.calBa+dx[12:15]
+            if hasG2 and s.fusionOn():
+                if not s.ekf.ok: s.ekf.initState(c)
+                s.ekf.updatePos(z2['p']-s.ins.p,z2['R'])
+                if z2['hasVel'] and c['Fusion']['useVel']:
+                    s.ekf.updateVel(z2['v']-s.ins.v,z2['Rv'])
+                dx2=s.ekf.consume()
+                s.ins.correct(dx2[0:3],dx2[3:6],dx2[6:9])
+                s.calBg=s.calBg+dx2[9:12]; s.calBa=s.calBa+dx2[12:15]
             if s.fusionOn():
                 if c['Fusion']['useZupt']:
                     F=c['Fusion']

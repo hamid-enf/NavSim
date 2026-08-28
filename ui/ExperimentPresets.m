@@ -12,7 +12,13 @@ methods (Static)
           '7. Initial Alignment Error', ...
           '8. INS Only vs GNSS/INS', ...
           '9. Variable dt', ...
-          '10. Combined Errors'};
+          '10. Combined Errors', ...
+          '11. Dual GNSS (weighting demo)', ...
+          '12. Satellite geometry (live DOP)', ...
+          '13. Real magnetometer alignment', ...
+          '14. Gyrocompass (earth-rate) alignment', ...
+          '15. Monte Carlo: current config (20 runs)', ...
+          '16. Monte Carlo: INS vs GNSS/INS (20 each)'};
     end
 
     function txt = description(idx)
@@ -36,7 +42,17 @@ methods (Static)
         ['dt متغیر (jitter 50%). INS باید در هر دو حالت سازگار بماند؛\n' ...
          'تأثیر Timing Error را ببینید.'], ...
         ['همه خطاها همزمان: بایاس+نویز+SF+Misalignment+GNSS outlier/dropout.\n' ...
-         'سناریوی واقعی. پایداری Fused را با INS Only مقایسه کنید.']};
+         'سناریوی واقعی. پایداری Fused را با INS Only مقایسه کنید.'], ...
+        ['دو رسیور (sigma ۱٫۵/۳ و ۴/۸ متر، تأخیر ۰٫۵s) به یک فیلتر.\n' ...
+         'فیلتر هر دو منبع را از طریق R وزن می‌دهد؛ Fused نزدیک‌تر به رسیور بهتر می‌ماند.'], ...
+        ['DOP زنده: سیگماها از دید ۶ ماهواره (sigmaH = sig0*HDOP).\n' ...
+         'نوار ±σ حول Fused با هندسه نفس می‌کشد: چرا عمودی بدتر است.'], ...
+        ['سکون + مغناطیس‌نمای واقعی: heading از میدان ژئومغناطیسی همگرا می‌شود.\n' ...
+         'انحراب ۵°، F=۵۰μT، نویز ۰٫۴μT؛ تخمین یو را در تب Attitude ببینید.'], ...
+        ['سکون + ژیروکمپاس (نرخ زمین): heading با tau مؤثر ۱۵s همگرا می‌شود\n' ...
+         '(ژیروکمپاس واقعی سکون، ساعت‌ها طول می‌کشد — اینجا شتاب‌دهیده است).'], ...
+        ['Monte Carlo: ۲۰ اجرای headless با کانفیگِ جاری. CDF خطای نهایی موقعیت.'], ...
+        ['Monte Carlo: ۲۰ اجرا INS Only در برابر ۲۰ اجرا GNSS/INS. دو CDF، یک پیام.']}
         txt = T{idx};
     end
 
@@ -46,6 +62,13 @@ methods (Static)
         base.Traj            = cfg.Traj;            % keep user's trajectory choice (incl. userExpr)
         base.Sim.duration    = cfg.Sim.duration;
         base.Sim.seed        = cfg.Sim.seed;
+        % Monte Carlo presets operate on the CURRENT config (that is the
+        % point): only normalize the seed; the runner varies it per run.
+        if idx >= 15
+            cfg.Sim.seed = 1000;
+            if idx == 16, cfg.Fusion.mode = 'ins'; end
+            return;
+        end
         cfg = base;
         I = cfg.IMU;
         allOff = struct('useGyroBias',false,'useGyroNoise',false,'useGyroSF',false, ...
@@ -59,6 +82,39 @@ methods (Static)
         cfg.Align.magHeadingSigmaDeg = 0;
         cfg.Align.coarseMovingSigmaDeg = 0;
         switch idx
+            case 11  % Dual GNSS weighting
+                for i=1:numel(fn), cfg.IMU.(fn{i}) = false; end
+                cfg.GNSS.enabled = true;  cfg.GNSS.useNoise = true;
+                cfg.GNSS.posSigmaH = 1.5; cfg.GNSS.posSigmaV = 3.0;
+                cfg.GNSS2.enabled = true; cfg.GNSS2.useNoise = true;
+                cfg.GNSS2.posSigmaH = 4.0; cfg.GNSS2.posSigmaV = 8.0;
+                cfg.GNSS2.delay = 0.5;
+            case 12  % Live DOP from satellite geometry
+                for i=1:numel(fn), cfg.IMU.(fn{i}) = false; end
+                cfg.GNSS.enabled = true;  cfg.GNSS.useNoise = true;
+                cfg.GNSS.useSatGeometry = true;
+                cfg.GNSS.satCount = 6; cfg.GNSS.sig0 = 1.0; cfg.GNSS.satPeriod = 45;
+            case 13  % Real magnetometer alignment (static)
+                cfg.Traj.type = 'Straight'; cfg.Traj.speed = 0;
+                cfg.Sim.duration = 60;
+                cfg.Align.enabled = true;  cfg.Align.duration = 45;
+                cfg.Align.headingModel = 'magnetometer';
+                cfg.Align.applyUserErr = false;
+                cfg.GNSS.enabled = false;
+                cfg.Fusion.mode = 'ins';
+                for i=1:numel(fn), cfg.IMU.(fn{i}) = false; end
+                cfg.IMU.useGyroNoise = true; cfg.IMU.useAccelNoise = true;
+            case 14  % Gyrocompass (earth-rate) alignment (static)
+                cfg.Traj.type = 'Straight'; cfg.Traj.speed = 0;
+                cfg.Sim.duration = 60;
+                cfg.Align.enabled = true;  cfg.Align.duration = 50;
+                cfg.Align.headingModel = 'gyrocompass';
+                cfg.Align.gyrocompassTau = 15;
+                cfg.Align.applyUserErr = false;
+                cfg.GNSS.enabled = false;
+                cfg.Fusion.mode = 'ins';
+                for i=1:numel(fn), cfg.IMU.(fn{i}) = false; end
+                cfg.IMU.useGyroNoise = true; cfg.IMU.useAccelNoise = true;
             case 1   % Perfect IMU
                 for i=1:numel(fn), cfg.IMU.(fn{i}) = false; end
             case 2   % Gyro Bias

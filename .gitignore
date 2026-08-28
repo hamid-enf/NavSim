@@ -11,3 +11,6 @@ octave-workspace
 # NavSim user exports (keep generated logs out of source control)
 navlog*.mat
 navlog*.csv
+
+# Educational video (generated artifacts)
+educational_video/media/

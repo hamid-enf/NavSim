@@ -88,8 +88,18 @@ methods
                 v{end+1} = sprintf('   meas epoch %.3f s  OOSM=%d', ...
                     snap.gnss.tMeas, snap.gnss.oosm);
             end
+            if isfield(snap.gnss, 'hdop') && isfinite(snap.gnss.hdop)
+                v{end+1} = sprintf('   HDOP %.2f  VDOP %.2f  (live sky geometry)', ...
+                    snap.gnss.hdop, snap.gnss.vdop);
+            end
         else
             v{end+1} = 'GNSS  (disabled)';
+        end
+        if isfield(snap, 'gnss2') && snap.gnss2.enabled
+            v{end+1} = 'GNSS2 (dual source)';
+            if snap.gnss2.has
+                v{end+1} = sprintf('   Pos NED [m]: %s', d2(snap.gnss2.p));
+            end
         end
         v{end+1} = ' ';
         v{end+1} = 'FILTER (PREDICTION) 1-sigma';
